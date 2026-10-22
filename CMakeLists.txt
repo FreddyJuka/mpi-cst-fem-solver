@@ -14,6 +14,13 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 option(USE_PARMETIS "Enable the ParMETIS parallel partitioner" OFF)
 option(USE_PETSC "Enable the PETSc solver backend" OFF)
 option(CSTFEM_MPI_OVERSUBSCRIBE "Pass --oversubscribe to mpiexec in tests (OpenMPI)" OFF)
+option(CSTFEM_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(CSTFEM_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all
+                      -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
 
 find_package(MPI REQUIRED COMPONENTS CXX)
 find_package(METIS REQUIRED)
@@ -31,25 +38,33 @@ endif()
 set(CSTFEM_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(cmake/config.hpp.in "${CSTFEM_GENERATED_DIR}/cstfem/config.hpp" @ONLY)
 
-add_library(cstfem
+# Serial core: mesh, case file, element, assembly, BCs, solver. No MPI, no METIS.
+add_library(cstfem_core
+  src/assembly.cpp
+  src/bc.cpp
   src/case.cpp
+  src/csr.cpp
   src/element.cpp
   src/mesh_io.cpp
+  src/solver.cpp
   src/version.cpp)
-target_include_directories(cstfem PUBLIC
+target_include_directories(cstfem_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CSTFEM_GENERATED_DIR}")
-target_link_libraries(cstfem PUBLIC MPI::MPI_CXX METIS::METIS)
-target_compile_features(cstfem PUBLIC cxx_std_17)
+target_compile_features(cstfem_core PUBLIC cxx_std_17)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(cstfem_core PUBLIC -Wall -Wextra -Wpedantic)
+endif()
+
+# Parallel layer: core + MPI + METIS. Interface-only until it has MPI sources (Milestone 4).
+add_library(cstfem INTERFACE)
+target_link_libraries(cstfem INTERFACE cstfem_core MPI::MPI_CXX METIS::METIS)
 # Optional backends are exposed only through the generated config.hpp (USE_* macros).
 if(USE_PARMETIS)
-  target_link_libraries(cstfem PUBLIC ParMETIS::ParMETIS)
+  target_link_libraries(cstfem INTERFACE ParMETIS::ParMETIS)
 endif()
 if(USE_PETSC)
-  target_link_libraries(cstfem PUBLIC PkgConfig::PETSC)
-endif()
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(cstfem PUBLIC -Wall -Wextra -Wpedantic)
+  target_link_libraries(cstfem INTERFACE PkgConfig::PETSC)
 endif()
 
 add_executable(cstfem_solve src/main.cpp)

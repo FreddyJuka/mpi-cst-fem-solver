@@ -1,0 +1,11 @@
+# LeakSanitizer suppressions for MPI tests in sanitizer builds (-DCSTFEM_SANITIZE=ON).
+# Only leaks whose stacks pass through the MPI runtime and its helpers are suppressed;
+# leaks in project code are still reported.
+leak:libmpi.so
+leak:libopen-pal.so
+leak:libopen-rte.so
+leak:libOpenCL.so
+leak:libhwloc.so
+# OpenMPI's progress thread runs on the system libevent; its remaining allocations show only
+# libevent_core plus frames from unloaded MPI plugins that cannot be symbolized.
+leak:libevent_core-

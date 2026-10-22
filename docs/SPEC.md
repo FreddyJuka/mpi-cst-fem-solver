@@ -73,7 +73,7 @@ kirsch.a         = 0.1
 
 ## 6. Boundary conditions
 
-- **Dirichlet:** symmetric elimination (zero row and column, unit diagonal, RHS corrected with `-K_col · ū`), which preserves symmetric positive definiteness for CG. Column elimination of ghost columns is done consistently across ranks.
+- **Dirichlet:** symmetric elimination (zero row and column, RHS corrected with `-K_col · ū`), which preserves symmetric positive definiteness for CG. The original diagonal `K_jj` is kept and `b_j = K_jj · ū_j`, so the matrix stays well scaled (a unit diagonal would be badly scaled against entries of order `E·t`). Column elimination of ghost columns is done consistently across ranks.
 - **Neumann:** consistent nodal forces from traction on 2-node line elements of a physical group, either constant or evaluated from an analytical field (Kirsch exact tractions).
 
 ## 7. Linear solver
