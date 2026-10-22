@@ -30,13 +30,21 @@ From the repository root, after generating the meshes (see "Mesh generation"):
 mpiexec -n 1 ./build/cstfem_solve cases/kirsch_L2.case
 ```
 
-Outputs go to the case's `output_dir` (e.g. `results/kirsch_L2/`): `solution.pvtu` + `solution_0.vtu` (open the `.pvtu` in ParaView), `timings.json`, and for the Kirsch case `hole_sigma_tt.csv` and `section_x0_sigma_xx.csv`. The solver is serial for now; more than one rank is rejected until Milestone 4, except for the partitioning step:
+Outputs go to the case's `output_dir` (e.g. `results/kirsch_L2/`): `solution.pvtu` + `solution_0.vtu` (open the `.pvtu` in ParaView), `timings.json`, and for the Kirsch case `hole_sigma_tt.csv` and `section_x0_sigma_xx.csv`. `python/check_vtu.py <output_dir>` decodes and checks the VTU output independently.
+
+With more than one rank the solve is distributed (METIS partition, row-owner matrix, halo exchange, parallel Jacobi-PCG):
+
+```
+mpiexec -n 4 ./build/cstfem_solve cases/kirsch_L3.case
+```
+
+Rank 0 prints iterations, residuals, error metrics and a per-rank load report; parallel file output (VTU/CSV/timings) is not written yet (Milestone 4c). The partitioning step can also be run alone:
 
 ```
 mpiexec -n 4 ./build/cstfem_solve cases/kirsch_L3.case --partition-only
 ```
 
-prints a partition report (METIS) and writes `partition.pvtu` with one piece per rank (`partition_id` per cell, `owner_rank` per node). `python/check_vtu.py <output_dir>` decodes and checks the VTU output independently.
+which prints a partition report (METIS) and writes `partition.pvtu` with one piece per rank (`partition_id` per cell, `owner_rank` per node).
 
 ## Tests
 

@@ -45,13 +45,7 @@ int main(int argc, char** argv) {
   } else if (partition_only) {
     status = cstfem::run_partition_only(case_path, MPI_COMM_WORLD, std::cout, std::cerr);
   } else if (size > 1) {
-    if (rank == 0)
-      std::fprintf(stderr,
-                   "error: launched with %d MPI ranks, but only the serial solver exists; "
-                   "the parallel path arrives in Milestone 4. Run with 1 rank, or use "
-                   "--partition-only.\n",
-                   size);
-    status = 1;
+    status = cstfem::run_parallel_case(case_path, MPI_COMM_WORLD, std::cout, std::cerr);
   } else {
     status = cstfem::run_serial_case(case_path, std::cout, std::cerr);
   }

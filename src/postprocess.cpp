@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -79,27 +78,34 @@ std::vector<int> elements_adjacent_to_group(const Mesh& mesh, const std::string&
   return out;
 }
 
-KirschMetrics kirsch_metrics(const ElementStresses& s, const KirschParams& p) {
-  KirschMetrics m;
-  double num = 0.0, den = 0.0, best = std::numeric_limits<double>::max();
+KirschPartial kirsch_partial(const ElementStresses& s, const KirschParams& p) {
+  KirschPartial k;
   for (std::size_t e = 0; e < s.sxx.size(); ++e) {
     const Vec3 ex = kirsch_stress(p, s.cx[e], s.cy[e]);
-    num += s.area[e] * norm2(s.sxx[e] - ex[0], s.syy[e] - ex[1], s.txy[e] - ex[2]);
-    den += s.area[e] * norm2(ex[0], ex[1], ex[2]);
+    k.err2 += s.area[e] * norm2(s.sxx[e] - ex[0], s.syy[e] - ex[1], s.txy[e] - ex[2]);
+    k.ref2 += s.area[e] * norm2(ex[0], ex[1], ex[2]);
     const double d = std::hypot(s.cx[e], s.cy[e] - p.a);
-    if (d < best) {
-      best = d;
-      m.scf_element = static_cast<int>(e);
+    if (d < k.scf_distance) {
+      k.scf_distance = d;
+      k.scf_element = static_cast<int>(e);
     }
   }
-  m.l2_rel_stress_error = std::sqrt(num / den);
-  if (m.scf_element >= 0) {
-    const int e = m.scf_element;
-    m.scf_x = s.cx[e];
-    m.scf_y = s.cy[e];
-    m.scf_numerical = s.sxx[e] / p.sigma_inf;
-    m.scf_analytical_centroid = kirsch_stress(p, s.cx[e], s.cy[e])[0] / p.sigma_inf;
-  }
+  return k;
+}
+
+void set_scf(KirschMetrics& m, const ElementStresses& s, const KirschParams& p, int e) {
+  m.scf_element = e;
+  m.scf_x = s.cx[e];
+  m.scf_y = s.cy[e];
+  m.scf_numerical = s.sxx[e] / p.sigma_inf;
+  m.scf_analytical_centroid = kirsch_stress(p, s.cx[e], s.cy[e])[0] / p.sigma_inf;
+}
+
+KirschMetrics kirsch_metrics(const ElementStresses& s, const KirschParams& p) {
+  const KirschPartial k = kirsch_partial(s, p);
+  KirschMetrics m;
+  m.l2_rel_stress_error = std::sqrt(k.err2 / k.ref2);
+  if (k.scf_element >= 0) set_scf(m, s, p, k.scf_element);
   return m;
 }
 

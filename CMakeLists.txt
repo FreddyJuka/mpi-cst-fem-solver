@@ -63,6 +63,8 @@ endif()
 
 # Parallel layer: everything that uses MPI or METIS. Never linked into cstfem_core.
 add_library(cstfem
+  src/distributed.cpp
+  src/ghost_exchange.cpp
   src/mpi_util.cpp
   src/parallel_driver.cpp
   src/partition.cpp)

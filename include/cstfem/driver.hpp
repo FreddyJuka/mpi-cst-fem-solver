@@ -6,10 +6,21 @@
 #include <vector>
 
 #include "cstfem/case.hpp"
+#include "cstfem/element.hpp"
 #include "cstfem/kirsch.hpp"
 #include "cstfem/mesh.hpp"
+#include "cstfem/solver.hpp"
 
 namespace cstfem {
+
+// Validated solver settings of a case file.
+struct CaseSettings {
+  std::string mesh_path, output_dir, plane_name;
+  PlaneCondition plane = PlaneCondition::Stress;
+  double E = 0, nu = 0, thickness = 0;
+  SolverOptions solver;
+};
+CaseSettings read_case_settings(const CaseFile& c);
 
 // Keys understood by the solver; others trigger a warning.
 const std::vector<std::string>& known_case_keys();

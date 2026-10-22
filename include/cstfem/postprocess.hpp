@@ -34,6 +34,17 @@ struct KirschMetrics {
 
 KirschMetrics kirsch_metrics(const ElementStresses& s, const KirschParams& p);
 
+// Building blocks of kirsch_metrics() for distributed use (sums are reduced over ranks).
+struct KirschPartial {
+  double err2 = 0.0;  // sum_e A_e |s_h - s(x_c)|^2
+  double ref2 = 0.0;  // sum_e A_e |s(x_c)|^2
+  int scf_element = -1;          // local element closest to (0, a)
+  double scf_distance = 1e300;   // its centroid distance to (0, a)
+};
+KirschPartial kirsch_partial(const ElementStresses& s, const KirschParams& p);
+// Fills the SCF fields of `m` from element e.
+void set_scf(KirschMetrics& m, const ElementStresses& s, const KirschParams& p, int e);
+
 // Centroid values next to the analytical field (17 significant digits).
 // hole_sigma_tt.csv: x, y, r, theta, sigma_tt_num, sigma_tt_exact (sorted by theta).
 void write_hole_csv(const std::string& path, const Mesh& mesh, const ElementStresses& s,

@@ -37,16 +37,17 @@ foreach(n 1 2 4)
   set_tests_properties(mpi_smoke_np${n} PROPERTIES ENVIRONMENT "${_mpi_env}")
 endforeach()
 
-# ---- Partitioning, distribution, ownership (MPI)
-add_executable(test_partition test_partition.cpp)
-target_link_libraries(test_partition PRIVATE cstfem)
-target_compile_definitions(test_partition PRIVATE
-  CSTFEM_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
-foreach(n 1 2 3 4)
-  add_test(NAME test_partition_np${n}
-    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${n} ${_mpi_extra}
-            $<TARGET_FILE:test_partition> ${MPIEXEC_POSTFLAGS})
-  set_tests_properties(test_partition_np${n} PROPERTIES ENVIRONMENT "${_mpi_env}")
+# ---- Partitioning/distribution and distributed solver (MPI), on 1-4 ranks
+foreach(t test_partition test_distributed)
+  add_executable(${t} ${t}.cpp)
+  target_link_libraries(${t} PRIVATE cstfem)
+  target_compile_definitions(${t} PRIVATE CSTFEM_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+  foreach(n 1 2 3 4)
+    add_test(NAME ${t}_np${n}
+      COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${n} ${_mpi_extra}
+              $<TARGET_FILE:${t}> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(${t}_np${n} PROPERTIES ENVIRONMENT "${_mpi_env}")
+  endforeach()
 endforeach()
 
 # ---- End-to-end Kirsch runs of cstfem_solve on the committed L0 and L1 meshes
@@ -83,13 +84,13 @@ add_test(NAME e2e_kirsch_check
           -P "${CMAKE_CURRENT_SOURCE_DIR}/check_e2e.cmake")
 set_tests_properties(e2e_kirsch_check PROPERTIES FIXTURES_REQUIRED e2e_kirsch)
 
-# More than one rank must be rejected clearly until Milestone 4.
-add_test(NAME e2e_reject_np2
+# Parallel end-to-end run (np = 2): must converge without warnings or errors.
+add_test(NAME e2e_kirsch_L1_np2
   COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${_mpi_extra}
-          $<TARGET_FILE:cstfem_solve> "${CMAKE_CURRENT_BINARY_DIR}/kirsch_L0_e2e.case"
+          $<TARGET_FILE:cstfem_solve> "${CMAKE_CURRENT_BINARY_DIR}/kirsch_L1_e2e.case"
           ${MPIEXEC_POSTFLAGS})
-set_tests_properties(e2e_reject_np2 PROPERTIES
-  PASS_REGULAR_EXPRESSION "parallel path arrives in Milestone 4" ENVIRONMENT "${_mpi_env}")
+set_tests_properties(e2e_kirsch_L1_np2 PROPERTIES
+  FAIL_REGULAR_EXPRESSION "error:|WARNING|NOT converged" ENVIRONMENT "${_mpi_env}")
 
 # Optional: decode the VTU with Python (needs numpy; skipped if unavailable).
 find_package(Python3 COMPONENTS Interpreter)

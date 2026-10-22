@@ -42,15 +42,10 @@ std::string str(const std::string& s) {
   return out + "\"";
 }
 
-struct Settings {
-  std::string mesh_path, output_dir, plane_name;
-  PlaneCondition plane = PlaneCondition::Stress;
-  double E = 0, nu = 0, thickness = 0;
-  SolverOptions solver;
-};
+}  // namespace
 
-Settings read_settings(const CaseFile& c) {
-  Settings s;
+CaseSettings read_case_settings(const CaseFile& c) {
+  CaseSettings s;
   s.mesh_path = c.get_string("mesh");
   s.output_dir = c.get_string("output_dir", "results");
   s.plane_name = c.get_string("plane");
@@ -84,8 +79,6 @@ Settings read_settings(const CaseFile& c) {
   return s;
 }
 
-}  // namespace
-
 const std::vector<std::string>& known_case_keys() {
   static const std::vector<std::string> keys = {
       "mesh",   "plane",    "E",          "nu",           "thickness",   "partitioner",
@@ -117,7 +110,7 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
     auto t0 = Clock::now();
     const CaseFile c = CaseFile::load(case_path);
     c.warn_unknown_keys(known_case_keys(), err);
-    const Settings s = read_settings(c);
+    const CaseSettings s = read_case_settings(c);
     const Mesh mesh = read_gmsh(s.mesh_path);
     const double t_read = seconds_since(t0);
     out << "mesh " << s.mesh_path << ": " << mesh.num_nodes() << " nodes, "
