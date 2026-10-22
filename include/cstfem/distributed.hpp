@@ -97,7 +97,8 @@ SolverStats solve_distributed(const DistMatrix& A, const std::vector<double>& b,
 
 // Kirsch metrics over all ranks: L2 sums via MPI_Allreduce, SCF element via MPI_MINLOC on
 // the centroid distance to (0, a), values broadcast from the winning rank. Collective.
-KirschMetrics kirsch_metrics_distributed(const ElementStresses& s, const KirschParams& p,
-                                         MPI_Comm comm);
+KirschMetrics kirsch_metrics_distributed(const Mesh& local_mesh, const std::vector<double>& u_local,
+                                         const ElementStresses& s, const KirschParams& p,
+                                         const ElasticMaterial& m, MPI_Comm comm);
 
 }  // namespace cstfem

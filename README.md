@@ -2,7 +2,7 @@
 
 A parallel 2D linear-elastic finite element solver in C++ using MPI domain decomposition and Constant Strain Triangle (CST) elements. A Python toolchain (Gmsh API) generates meshes and drives benchmarks of parallel speedup and scalability.
 
-Status: Milestone 4c (serial and distributed solver with parallel output). See [docs/SPEC.md](docs/SPEC.md).
+Status: Milestone 5 (verified against the Kirsch solution). See [docs/SPEC.md](docs/SPEC.md) and the verification report [docs/VERIFICATION.md](docs/VERIFICATION.md) (convergence rates, figures).
 
 ## Build
 
@@ -77,6 +77,8 @@ python/.venv/bin/python python/mesh_kirsch.py --level 2 -o meshes/kirsch_L2.msh
 python/.venv/bin/python python/check_mesh.py meshes/kirsch_L2.msh
 ```
 
+The convergence study (levels 0-5, figures in `docs/figures/`) is run with `python/run_convergence.py --np 8`; the analytical displacement field is derived and checked with `python/derive_kirsch_displacement.py` (needs `python/requirements-dev.txt`, i.e. sympy).
+
 `mesh_kirsch.py --help` lists the parameters (`--a`, `--L`, `--h-hole`, `--h-far`, `--level`). A small level-0 mesh is committed as `tests/data/kirsch_L0.msh` for the reader tests.
 
 ## Third-party dependencies
@@ -87,8 +89,10 @@ No third-party source code is vendored; dependencies are found on the system. Th
 |---|---|---|
 | OpenMPI 4.1.6 (`libopenmpi-dev`) | required (any MPI) | BSD-style 3-clause license text (redistribution with notice; no endorsement). Bundled components carry their own terms, e.g. ROMIO (University of Chicago permissive notice), ptmalloc2 (LGPL-2.1+), libltdl (LGPL-2+ with exception). |
 | METIS 5.1.0 (`libmetis-dev`) | required | Apache-2.0. Some bundled GKlib files: BSD-3-clause (`ms_inttypes.h`, `ms_stdint.h`), LGPL-2.1+ (`getopt.c`, `gk_mksort.h`), BSD-like (`random.c`). |
-| ParMETIS 4.0.3 (`libparmetis-dev`, Ubuntu multiverse) | optional (`-DUSE_PARMETIS=ON`) | Non-free: "can be freely used for educational and research purposes by non-profit institutions and US government agencies only. Other organizations are allowed to use ParMETIS/METIS only for evaluation purposes, and any further uses will require prior approval. The software may not be sold or redistributed without prior approval." |
+| ParMETIS 4.0.3 (`libparmetis-dev`, Ubuntu multiverse) | optional (`-DUSE_PARMETIS=ON`) | The copyright file describes it as "non-free software" and states: "It can be freely used for educational and research purposes by non-profit institutions and US government agencies only. Other organizations are allowed to use ParMETIS/METIS only for evaluation purposes, and any further uses will require prior approval. The software may not be sold or redistributed without prior approval." |
 | PETSc | optional (`-DUSE_PETSC=ON`, Milestone 7) | not verified yet (not installed) |
+
+The default build (MPI + METIS) links the system libraries dynamically. METIS is Apache-2.0 with some bundled GKlib files under BSD-3-clause and LGPL-2.1+; OpenMPI's bundled components also include LGPL-licensed parts. This repository does not vendor or redistribute any of these libraries, so the repository code itself remains MIT.
 
 **ParMETIS notice.** ParMETIS is strictly optional and off by default. This project never redistributes it: no vendored source, no release binaries, no container images that include it, and it is not used in CI. By installing ParMETIS and building with `-DUSE_PARMETIS=ON` you accept its license terms yourself; read `/usr/share/doc/libparmetis-dev/copyright` (or the license of the version you install) before doing so.
 

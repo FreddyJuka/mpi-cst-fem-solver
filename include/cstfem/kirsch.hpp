@@ -33,4 +33,14 @@ Vec3 kirsch_stress(const KirschParams& p, double x, double y);
 // Traction t = sigma . n of the analytical field, as a callback for add_traction().
 TractionFn kirsch_traction(const KirschParams& p);
 
+// Analytical displacement (u_x, u_y) at (x, y), r > 0, derived and verified symbolically by
+// python/derive_kirsch_displacement.py (strains -> SPEC stresses, equilibrium, symmetry
+// u_x = 0 on x = 0 and u_y = 0 on y = 0, so no rigid-body terms). With mu = E / (2 (1 + nu))
+// and the Kolosov constant kappa = (3 - nu) / (1 + nu) (plane stress) or 3 - 4 nu (strain):
+//   u_r = s / (8 mu) [ (kappa - 1) r + 2 a^2 / r
+//                      + 2 (r + (kappa + 1) a^2 / r - a^4 / r^3) cos 2theta ]
+//   u_t = -s / (4 mu) [ r + (kappa - 1) a^2 / r + a^4 / r^3 ] sin 2theta
+std::array<double, 2> kirsch_displacement(const KirschParams& p, double E, double nu,
+                                          PlaneCondition plane, double x, double y);
+
 }  // namespace cstfem

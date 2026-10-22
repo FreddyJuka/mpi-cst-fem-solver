@@ -44,4 +44,19 @@ TractionFn kirsch_traction(const KirschParams& p) {
   };
 }
 
+std::array<double, 2> kirsch_displacement(const KirschParams& p, double E, double nu,
+                                          PlaneCondition plane, double x, double y) {
+  const double mu = E / (2.0 * (1.0 + nu));
+  const double kappa = plane == PlaneCondition::Stress ? (3.0 - nu) / (1.0 + nu) : 3.0 - 4.0 * nu;
+  const double r = std::hypot(x, y), th = std::atan2(y, x);
+  const double a2 = p.a * p.a, a4 = a2 * a2, r3 = r * r * r;
+  const double ur = p.sigma_inf / (8.0 * mu) *
+                    ((kappa - 1.0) * r + 2.0 * a2 / r +
+                     2.0 * (r + (kappa + 1.0) * a2 / r - a4 / r3) * std::cos(2.0 * th));
+  const double ut =
+      -p.sigma_inf / (4.0 * mu) * (r + (kappa - 1.0) * a2 / r + a4 / r3) * std::sin(2.0 * th);
+  const double c = std::cos(th), s = std::sin(th);
+  return {ur * c - ut * s, ur * s + ut * c};
+}
+
 }  // namespace cstfem

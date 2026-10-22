@@ -76,6 +76,52 @@ void test_conversion_consistency() {
   CHECK_NEAR(c[2], p.rt, 1e-6);
 }
 
+void test_displacement_vs_sympy() {
+  // Reference values printed by python/derive_kirsch_displacement.py
+  // (sigma_inf = 100e6, a = 0.1, E = 210e9, nu = 0.3).
+  struct Ref {
+    PlaneCondition plane;
+    double x, y, ux, uy;
+  };
+  const Ref refs[] = {
+      {PlaneCondition::Stress, 0.1, 0.0, 0.00014285714285714285714, 0.0},
+      {PlaneCondition::Stress, 0.0, 0.1, 0.0, -0.000047619047619047619048},
+      {PlaneCondition::Stress, 0.3, 0.2, 0.00016331360946745562130, -0.000025922795153564384334},
+      {PlaneCondition::Stress, 1.0, 1.0, 0.00047941250000000000000, -0.00014298392857142857143},
+      {PlaneCondition::Stress, 1.0, 0.0, 0.00048877857142857142857, 0.0},
+      {PlaneCondition::Stress, 0.05, 0.9, 0.000023833524260355029586, -0.00013560843144547759932},
+      {PlaneCondition::Strain, 0.1, 0.0, 0.00013000000000000000000, 0.0},
+      {PlaneCondition::Strain, 0.0, 0.1, 0.0, -0.000043333333333333333333},
+      {PlaneCondition::Strain, 0.3, 0.2, 0.00014847844463229078614, -0.000033175542406311637081},
+      {PlaneCondition::Strain, 1.0, 1.0, 0.00043612678571428571429, -0.00018541250000000000000},
+      {PlaneCondition::Strain, 1.0, 0.0, 0.00044506428571428571429, 0.0},
+      {PlaneCondition::Strain, 0.05, 0.9, 0.000021637919864750633981, -0.00017323040946745562130},
+  };
+  const double scale = 5e-4;  // max |u| among the reference values
+  for (const Ref& r : refs) {
+    const auto u = kirsch_displacement(kP, 210e9, 0.3, r.plane, r.x, r.y);
+    CHECK_NEAR(u[0], r.ux, 1e-14 * scale);
+    CHECK_NEAR(u[1], r.uy, 1e-14 * scale);
+  }
+}
+
+void test_displacement_consistent_with_stress() {
+  // Central differences of the displacement, through Hooke's law, give the Kirsch stress.
+  for (PlaneCondition plane : {PlaneCondition::Stress, PlaneCondition::Strain}) {
+    const double E = 210e9, nu = 0.3, h = 1e-6;
+    const Mat3 D = constitutive_matrix(E, nu, plane);
+    for (const auto& xy : {std::array<double, 2>{0.15, 0.05}, std::array<double, 2>{0.4, 0.7}}) {
+      auto u = [&](double x, double y) { return kirsch_displacement(kP, E, nu, plane, x, y); };
+      const auto ux1 = u(xy[0] + h, xy[1]), ux0 = u(xy[0] - h, xy[1]);
+      const auto uy1 = u(xy[0], xy[1] + h), uy0 = u(xy[0], xy[1] - h);
+      const Vec3 eps = {(ux1[0] - ux0[0]) / (2 * h), (uy1[1] - uy0[1]) / (2 * h),
+                        (uy1[0] - uy0[0]) / (2 * h) + (ux1[1] - ux0[1]) / (2 * h)};
+      const Vec3 sig = stress_from_strain(D, eps), ref = kirsch_stress(kP, xy[0], xy[1]);
+      for (int i = 0; i < 3; ++i) CHECK_NEAR(sig[i] / kP.sigma_inf, ref[i] / kP.sigma_inf, 1e-6);
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -83,5 +129,7 @@ int main() {
   RUN_TEST(test_hole_traction_free);
   RUN_TEST(test_far_field);
   RUN_TEST(test_conversion_consistency);
+  RUN_TEST(test_displacement_vs_sympy);
+  RUN_TEST(test_displacement_consistent_with_stress);
   return test_summary();
 }

@@ -2,7 +2,8 @@
 #   -DDIRS="dir_L0;dir_L1"  output directories, coarse to fine
 #   -DLIMIT=1e-9            10 * rtol of the runs (CMake has no floating-point arithmetic,
 #                           so the caller passes the product)
-# Checks: outputs exist, converged, true residual < LIMIT, L2 stress error decreases.
+# Checks: outputs exist, converged, true residual < LIMIT, and the L2 stress, L2 displacement
+# and energy-norm errors all decrease from one directory to the next (no absolute thresholds).
 
 if(NOT DEFINED DIRS OR NOT DEFINED LIMIT)
   message(FATAL_ERROR "usage: cmake -DDIRS=\"d0;d1\" -DLIMIT=<10*rtol> -P check_e2e.cmake")
@@ -10,6 +11,8 @@ endif()
 set(files solution.pvtu solution_0.vtu timings.json hole_sigma_tt.csv section_x0_sigma_xx.csv)
 
 set(prev "")
+set(prev_disp "")
+set(prev_energy "")
 foreach(dir IN LISTS DIRS)
   foreach(f IN LISTS files)
     if(NOT EXISTS "${dir}/${f}")
@@ -20,10 +23,13 @@ foreach(dir IN LISTS DIRS)
   string(JSON converged GET "${json}" solver converged)
   string(JSON true_res GET "${json}" solver true_rel_residual)
   string(JSON err GET "${json}" kirsch l2_rel_stress_error)
+  string(JSON disp GET "${json}" kirsch l2_rel_displacement_error)
+  string(JSON energy GET "${json}" kirsch energy_rel_error)
   string(JSON dofs GET "${json}" dofs)
   string(JSON iters GET "${json}" solver iterations)
   message(STATUS "${dir}: dofs ${dofs}, iterations ${iters}, converged ${converged}, "
-                 "true residual ${true_res}, L2 stress error ${err}")
+                 "true residual ${true_res}, L2 stress error ${err}, L2 displacement error ${disp}, "
+                 "energy error ${energy}")
   if(NOT converged)
     message(FATAL_ERROR "${dir}: solver did not converge")
   endif()
@@ -33,6 +39,14 @@ foreach(dir IN LISTS DIRS)
   if(NOT prev STREQUAL "" AND NOT err LESS prev)
     message(FATAL_ERROR "${dir}: L2 stress error ${err} did not decrease (previous ${prev})")
   endif()
+  if(NOT prev_disp STREQUAL "" AND NOT disp LESS prev_disp)
+    message(FATAL_ERROR "${dir}: L2 displacement error ${disp} did not decrease (previous ${prev_disp})")
+  endif()
+  if(NOT prev_energy STREQUAL "" AND NOT energy LESS prev_energy)
+    message(FATAL_ERROR "${dir}: energy error ${energy} did not decrease (previous ${prev_energy})")
+  endif()
   set(prev "${err}")
+  set(prev_disp "${disp}")
+  set(prev_energy "${energy}")
 endforeach()
 message(STATUS "e2e check passed")

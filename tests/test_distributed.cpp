@@ -327,9 +327,11 @@ void test_serial_equivalence() {
     const SolverStats st = solve_distributed(p.A, b, u, opt, MPI_COMM_WORLD);
     CHECK(st.converged);
     const auto u_par = gather_to_serial(u, map);
-    const ElementStresses es =
-        compute_element_stresses(p.dm.local, to_mesh_local(p.layout, u), D, kNu, PlaneCondition::Stress);
-    const KirschMetrics mp = kirsch_metrics_distributed(es, kKirsch, MPI_COMM_WORLD);
+    const ElasticMaterial mat{kE, kNu, PlaneCondition::Stress};
+    const std::vector<double> u_loc = to_mesh_local(p.layout, u);
+    const ElementStresses es = compute_element_stresses(p.dm.local, u_loc, D, kNu, mat.plane);
+    const KirschMetrics mp =
+        kirsch_metrics_distributed(p.dm.local, u_loc, es, kKirsch, mat, MPI_COMM_WORLD);
 
     if (g_rank == 0) {
       CsrMatrix K = build_stiffness_pattern(full);
@@ -342,7 +344,7 @@ void test_serial_equivalence() {
       solver.setup(K);
       const SolverStats ss = solver.solve(f, us);
       const KirschMetrics ms = kirsch_metrics(
-          compute_element_stresses(full, us, D, kNu, PlaneCondition::Stress), kKirsch);
+          full, us, compute_element_stresses(full, us, D, kNu, mat.plane), kKirsch, mat);
       const double du = rel_max_diff(u_par, us);
       const double dl2 = std::abs(mp.l2_rel_stress_error / ms.l2_rel_stress_error - 1);
       const double dscf = std::abs(mp.scf_numerical / ms.scf_numerical - 1);
@@ -353,6 +355,13 @@ void test_serial_equivalence() {
       CHECK(du < 1e-8);
       CHECK(dl2 < 1e-8);
       CHECK(dscf < 1e-8);
+      const double dd = std::abs(mp.l2_rel_displacement_error / ms.l2_rel_displacement_error - 1);
+      const double de = std::abs(mp.energy_rel_error / ms.energy_rel_error - 1);
+      std::printf("    displacement L2 %.6e vs %.6e (diff %.1e); energy %.6e vs %.6e (diff %.1e)\n",
+                  ms.l2_rel_displacement_error, mp.l2_rel_displacement_error, dd,
+                  ms.energy_rel_error, mp.energy_rel_error, de);
+      CHECK(dd < 1e-8);
+      CHECK(de < 1e-8);
       CHECK(mp.scf_x == ms.scf_x && mp.scf_y == ms.scf_y);
     }
   }

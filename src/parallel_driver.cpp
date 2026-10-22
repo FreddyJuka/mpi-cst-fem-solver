@@ -223,7 +223,8 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
   const std::vector<double> u_local = to_mesh_local(layout, u);
   const ElementStresses es = compute_element_stresses(dm.local, u_local, D, s.nu, s.plane);
   std::optional<KirschMetrics> metrics;
-  if (kirsch) metrics = kirsch_metrics_distributed(es, *kirsch, comm);
+  if (kirsch)
+    metrics = kirsch_metrics_distributed(dm.local, u_local, es, *kirsch, {s.E, s.nu, s.plane}, comm);
   timer.stop("postprocess");
 
   // ---- output: one VTU piece per rank, .pvtu and gathered CSVs on rank 0
@@ -267,7 +268,9 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
   collective(comm, [&] {
     if (rank != 0) return;
     if (metrics)
-      out << "Kirsch: relative L2 stress error " << metrics->l2_rel_stress_error
+      out << "Kirsch: relative L2 errors: stress (centroid) " << metrics->l2_rel_stress_error
+          << ", displacement " << metrics->l2_rel_displacement_error << "; energy norm "
+          << metrics->energy_rel_error
           << "; SCF at centroid (" << metrics->scf_x << ", " << metrics->scf_y
           << "): numerical " << metrics->scf_numerical << ", analytical "
           << metrics->scf_analytical_centroid << ", theoretical 3\n";
@@ -329,6 +332,9 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
          << "    \"sigma_inf\": " << json_number(kirsch->sigma_inf) << ",\n"
          << "    \"a\": " << json_number(kirsch->a) << ",\n"
          << "    \"l2_rel_stress_error\": " << json_number(metrics->l2_rel_stress_error) << ",\n"
+         << "    \"l2_rel_displacement_error\": "
+         << json_number(metrics->l2_rel_displacement_error) << ",\n"
+         << "    \"energy_rel_error\": " << json_number(metrics->energy_rel_error) << ",\n"
          << "    \"scf\": {\n"
          << "      \"x\": " << json_number(metrics->scf_x) << ",\n"
          << "      \"y\": " << json_number(metrics->scf_y) << ",\n"

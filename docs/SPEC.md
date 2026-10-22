@@ -146,8 +146,8 @@ mpi-cst-fem-solver/
 ### Licensing policy
 - All code in this repository is MIT-licensed.
 - No third-party source code is vendored; dependencies are found on the system via CMake.
-- The default build (MPI + METIS) contains only permissively licensed dependencies. The METIS license must be confirmed for the installed version.
-- ParMETIS has its own restrictive terms. It is strictly optional, is never redistributed (no vendored source, no release binaries, no container images that include it), and is not used in CI.
+- The default build links MPI and METIS dynamically from the system. METIS is Apache-2.0, with some bundled GKlib files under BSD-3-clause and LGPL-2.1+ (per the Debian/Ubuntu `libmetis-dev` copyright file); OpenMPI is distributed under a BSD-style license with bundled components under their own terms (including LGPL). The repository does not vendor or redistribute any of them, so the repository code remains MIT. The licenses must be re-checked for the installed versions.
+- ParMETIS has its own terms; its copyright file states: "It can be freely used for educational and research purposes by non-profit institutions and US government agencies only. Other organizations are allowed to use ParMETIS/METIS only for evaluation purposes, and any further uses will require prior approval. The software may not be sold or redistributed without prior approval." It is strictly optional, is never redistributed (no vendored source, no release binaries, no container images that include it), and is not used in CI.
 - The README includes a "Third-party dependencies" section listing each dependency, its license, and a notice that ParMETIS terms are accepted by the user when installing it. The license text of the installed ParMETIS version must be checked before writing that notice.
 
 ## 13. Testing

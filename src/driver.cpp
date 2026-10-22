@@ -162,11 +162,13 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
 
     std::optional<KirschMetrics> metrics;
     if (kirsch) {
-      metrics = kirsch_metrics(es, *kirsch);
+      metrics = kirsch_metrics(mesh, u, es, *kirsch, {s.E, s.nu, s.plane});
       write_hole_csv((dir / "hole_sigma_tt.csv").string(), hole_csv_rows(mesh, es, *kirsch));
       write_section_x0_csv((dir / "section_x0_sigma_xx.csv").string(),
                            section_x0_csv_rows(mesh, es, *kirsch));
-      out << "Kirsch: relative L2 stress error " << metrics->l2_rel_stress_error
+      out << "Kirsch: relative L2 errors: stress (centroid) " << metrics->l2_rel_stress_error
+          << ", displacement " << metrics->l2_rel_displacement_error << "; energy norm "
+          << metrics->energy_rel_error
           << "; SCF at centroid (" << metrics->scf_x << ", " << metrics->scf_y
           << "): numerical " << metrics->scf_numerical << ", analytical "
           << metrics->scf_analytical_centroid << ", theoretical 3\n";
@@ -215,6 +217,9 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
          << "    \"sigma_inf\": " << num(kirsch->sigma_inf) << ",\n"
          << "    \"a\": " << num(kirsch->a) << ",\n"
          << "    \"l2_rel_stress_error\": " << num(metrics->l2_rel_stress_error) << ",\n"
+         << "    \"l2_rel_displacement_error\": " << num(metrics->l2_rel_displacement_error)
+         << ",\n"
+         << "    \"energy_rel_error\": " << num(metrics->energy_rel_error) << ",\n"
          << "    \"scf\": {\n"
          << "      \"element\": " << metrics->scf_element << ",\n"
          << "      \"x\": " << num(metrics->scf_x) << ",\n"

@@ -270,13 +270,22 @@ SolverStats solve_distributed(const DistMatrix& A, const std::vector<double>& b,
   return pcg_jacobi(DistOperator(A), inv_diag, DistReduction(comm), b, x, options);
 }
 
-KirschMetrics kirsch_metrics_distributed(const ElementStresses& s, const KirschParams& p,
-                                         MPI_Comm comm) {
+KirschMetrics kirsch_metrics_distributed(const Mesh& local_mesh, const std::vector<double>& u_local,
+                                         const ElementStresses& s, const KirschParams& p,
+                                         const ElasticMaterial& mat, MPI_Comm comm) {
   int rank = 0;
   MPI_Comm_rank(comm, &rank);
-  const KirschPartial k = kirsch_partial(s, p);
-  double sums[2] = {k.err2, k.ref2}, total[2] = {0.0, 0.0};
-  MPI_Allreduce(sums, total, 2, MPI_DOUBLE, MPI_SUM, comm);
+  const KirschPartial k = kirsch_partial(local_mesh, u_local, s, p, mat);
+  const double sums[6] = {k.err2, k.ref2, k.disp_err2, k.disp_ref2, k.energy_err2, k.energy_ref2};
+  double total[6] = {};
+  MPI_Allreduce(sums, total, 6, MPI_DOUBLE, MPI_SUM, comm);
+  KirschPartial reduced;
+  reduced.err2 = total[0];
+  reduced.ref2 = total[1];
+  reduced.disp_err2 = total[2];
+  reduced.disp_ref2 = total[3];
+  reduced.energy_err2 = total[4];
+  reduced.energy_ref2 = total[5];
 
   struct {
     double distance;
@@ -285,7 +294,7 @@ KirschMetrics kirsch_metrics_distributed(const ElementStresses& s, const KirschP
   MPI_Allreduce(&mine, &best, 1, MPI_DOUBLE_INT, MPI_MINLOC, comm);
 
   KirschMetrics m;
-  m.l2_rel_stress_error = std::sqrt(total[0] / total[1]);
+  set_relative_errors(m, reduced);
   if (rank == best.rank && k.scf_element >= 0) set_scf(m, s, p, k.scf_element);
   double v[5] = {m.scf_x, m.scf_y, m.scf_numerical, m.scf_analytical_centroid,
                  static_cast<double>(m.scf_element)};

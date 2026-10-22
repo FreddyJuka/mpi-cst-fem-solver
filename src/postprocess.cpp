@@ -78,7 +78,21 @@ std::vector<int> elements_adjacent_to_group(const Mesh& mesh, const std::string&
   return out;
 }
 
-KirschPartial kirsch_partial(const ElementStresses& s, const KirschParams& p) {
+KirschPartial kirsch_partial(const Mesh& mesh, const std::vector<double>& u_local,
+                             const ElementStresses& s, const KirschParams& p,
+                             const ElasticMaterial& m) {
+  // Compliance C = D^-1 for (sxx, syy, txy) -> (exx, eyy, gxy): 2x2 normal block + shear.
+  const Mat3 D = constitutive_matrix(m.E, m.nu, m.plane);
+  const double det = D[0] * D[4] - D[1] * D[3];
+  const double C00 = D[4] / det, C01 = -D[1] / det, C11 = D[0] / det, C22 = 1.0 / D[8];
+  auto energy = [&](const Vec3& v) {
+    return C00 * v[0] * v[0] + 2.0 * C01 * v[0] * v[1] + C11 * v[1] * v[1] + C22 * v[2] * v[2];
+  };
+  // Degree-2 rule: barycentric (2/3, 1/6, 1/6) and permutations, weights A/3.
+  const double bary[3][3] = {{2.0 / 3, 1.0 / 6, 1.0 / 6},
+                             {1.0 / 6, 2.0 / 3, 1.0 / 6},
+                             {1.0 / 6, 1.0 / 6, 2.0 / 3}};
+
   KirschPartial k;
   for (std::size_t e = 0; e < s.sxx.size(); ++e) {
     const Vec3 ex = kirsch_stress(p, s.cx[e], s.cy[e]);
@@ -89,8 +103,32 @@ KirschPartial kirsch_partial(const ElementStresses& s, const KirschParams& p) {
       k.scf_distance = d;
       k.scf_element = static_cast<int>(e);
     }
+
+    const int* n = &mesh.triangles[3 * e];
+    const double w = s.area[e] / 3.0;
+    for (const auto& L : bary) {
+      double x = 0.0, y = 0.0, uh = 0.0, vh = 0.0;
+      for (int i = 0; i < 3; ++i) {
+        x += L[i] * mesh.xy[2 * n[i]];
+        y += L[i] * mesh.xy[2 * n[i] + 1];
+        uh += L[i] * u_local[2 * n[i]];
+        vh += L[i] * u_local[2 * n[i] + 1];
+      }
+      const auto u = kirsch_displacement(p, m.E, m.nu, m.plane, x, y);
+      k.disp_err2 += w * ((uh - u[0]) * (uh - u[0]) + (vh - u[1]) * (vh - u[1]));
+      k.disp_ref2 += w * (u[0] * u[0] + u[1] * u[1]);
+      const Vec3 sq = kirsch_stress(p, x, y);
+      k.energy_err2 += w * energy({s.sxx[e] - sq[0], s.syy[e] - sq[1], s.txy[e] - sq[2]});
+      k.energy_ref2 += w * energy(sq);
+    }
   }
   return k;
+}
+
+void set_relative_errors(KirschMetrics& out, const KirschPartial& k) {
+  out.l2_rel_stress_error = std::sqrt(k.err2 / k.ref2);
+  out.l2_rel_displacement_error = std::sqrt(k.disp_err2 / k.disp_ref2);
+  out.energy_rel_error = std::sqrt(k.energy_err2 / k.energy_ref2);
 }
 
 void set_scf(KirschMetrics& m, const ElementStresses& s, const KirschParams& p, int e) {
@@ -101,12 +139,14 @@ void set_scf(KirschMetrics& m, const ElementStresses& s, const KirschParams& p, 
   m.scf_analytical_centroid = kirsch_stress(p, s.cx[e], s.cy[e])[0] / p.sigma_inf;
 }
 
-KirschMetrics kirsch_metrics(const ElementStresses& s, const KirschParams& p) {
-  const KirschPartial k = kirsch_partial(s, p);
-  KirschMetrics m;
-  m.l2_rel_stress_error = std::sqrt(k.err2 / k.ref2);
-  if (k.scf_element >= 0) set_scf(m, s, p, k.scf_element);
-  return m;
+KirschMetrics kirsch_metrics(const Mesh& mesh, const std::vector<double>& u_local,
+                             const ElementStresses& s, const KirschParams& p,
+                             const ElasticMaterial& m) {
+  const KirschPartial k = kirsch_partial(mesh, u_local, s, p, m);
+  KirschMetrics out;
+  set_relative_errors(out, k);
+  if (k.scf_element >= 0) set_scf(out, s, p, k.scf_element);
+  return out;
 }
 
 SolutionPiece solution_arrays(const Mesh& mesh, const std::vector<double>& u_local,

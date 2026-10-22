@@ -1,0 +1,2 @@
+# Development tools (not needed to build or run the solver)
+sympy
