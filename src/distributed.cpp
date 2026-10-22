@@ -234,27 +234,47 @@ void apply_dirichlet_distributed(const DistributedMesh& dm, DofLayout& layout,
 }
 
 void DistOperator::apply(const std::vector<double>& x, std::vector<double>& y) const {
+  BreakdownTimer tm(bd_);
   A_.halo->begin_forward(x.data());
+  tm.add(&SolveBreakdown::halo_post);
   A_.loc.multiply(x, y);  // overlaps the halo exchange
-  A_.halo->end_forward(halo_values_.data());
+  tm.add(&SolveBreakdown::spmv_local);
+  A_.halo->wait_forward();
+  tm.add(&SolveBreakdown::halo_wait);
+  A_.halo->unpack_forward(halo_values_.data());
+  tm.add(&SolveBreakdown::halo_post);
   const CsrMatrix& G = A_.ghost;
   for (int i = 0; i < G.num_rows; ++i) {
     double s = 0.0;
     for (int k = G.row_ptr[i]; k < G.row_ptr[i + 1]; ++k) s += G.vals[k] * halo_values_[G.cols[k]];
     y[i] += s;
   }
+  tm.add(&SolveBreakdown::spmv_ghost);
+  if (bd_) {
+    ++bd_->spmv_calls;
+    bd_->halo_bytes_sent +=
+        static_cast<long long>(A_.halo->forward_send_values() * sizeof(double));
+    bd_->halo_messages_sent += A_.halo->forward_send_messages();
+  }
 }
 
 double DistReduction::dot(const std::vector<double>& a, const std::vector<double>& b) const {
+  BreakdownTimer tm(bd_);
   double local = 0.0, global = 0.0;
   for (std::size_t i = 0; i < a.size(); ++i) local += a[i] * b[i];
+  tm.add(&SolveBreakdown::dot_local);
   MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM, comm_);
+  tm.add(&SolveBreakdown::allreduce);
+  if (bd_) ++bd_->reductions;
   return global;
 }
 
 SolverStats solve_distributed(const DistMatrix& A, const std::vector<double>& b,
                               std::vector<double>& x, const SolverOptions& options,
-                              MPI_Comm comm) {
+                              MPI_Comm comm, SolveBreakdown* timing) {
+  if (timing) timing->clock = [] { return MPI_Wtime(); };
+  const double t_start = MPI_Wtime();
+  BreakdownTimer tm(timing);
   std::vector<double> inv_diag(A.n_owned);
   bool ok = true;
   std::string error;
@@ -267,7 +287,12 @@ SolverStats solve_distributed(const DistMatrix& A, const std::vector<double>& b,
     inv_diag[i] = 1.0 / d;
   }
   check_collective(ok, error, comm);
-  return pcg_jacobi(DistOperator(A), inv_diag, DistReduction(comm), b, x, options);
+  tm.add(&SolveBreakdown::setup);
+  SolverStats st =
+      pcg_jacobi(DistOperator(A, timing), inv_diag, DistReduction(comm, timing), b, x, options,
+                 timing);
+  if (timing) timing->total += MPI_Wtime() - t_start;
+  return st;
 }
 
 KirschMetrics kirsch_metrics_distributed(const Mesh& local_mesh, const std::vector<double>& u_local,

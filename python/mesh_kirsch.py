@@ -6,7 +6,9 @@ Physical groups: hole, left_sym, bottom_sym, right, top, domain.
 Output: Gmsh .msh format 4.1, ASCII, linear triangles only.
 """
 import argparse
+import math
 import sys
+import time
 from pathlib import Path
 
 import gmsh
@@ -35,14 +37,17 @@ def _classify_curves(a, L, tol):
     return groups
 
 
-def generate(a=0.1, L=1.0, h_hole=0.02, h_far=0.1, level=0, output="kirsch.msh", verbose=False):
+def generate(a=0.1, L=1.0, h_hole=0.02, h_far=0.1, level=0, output="kirsch.msh", verbose=False,
+             scale=1.0):
     """Generate the Kirsch quarter-plate mesh and write it to `output` (.msh v4.1 ASCII).
 
-    Sizes h_hole and h_far are scaled by 2**(-level). Returns the output path.
+    Sizes h_hole and h_far are multiplied by scale * 2**(-level). Returns the output path.
     """
+    if not scale > 0:
+        raise ValueError("scale must be positive")
     if not 0 < a < L:
         raise ValueError("require 0 < a < L")
-    scale = 2.0 ** (-level)
+    factor = scale * 2.0 ** (-level)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -74,8 +79,8 @@ def generate(a=0.1, L=1.0, h_hole=0.02, h_far=0.1, level=0, output="kirsch.msh",
         gmsh.model.mesh.field.setNumber(dist, "Sampling", 200)
         thr = gmsh.model.mesh.field.add("Threshold")
         gmsh.model.mesh.field.setNumber(thr, "InField", dist)
-        gmsh.model.mesh.field.setNumber(thr, "SizeMin", h_hole * scale)
-        gmsh.model.mesh.field.setNumber(thr, "SizeMax", h_far * scale)
+        gmsh.model.mesh.field.setNumber(thr, "SizeMin", h_hole * factor)
+        gmsh.model.mesh.field.setNumber(thr, "SizeMax", h_far * factor)
         gmsh.model.mesh.field.setNumber(thr, "DistMin", 0.0)
         gmsh.model.mesh.field.setNumber(thr, "DistMax", L / 2)
         gmsh.model.mesh.field.setAsBackgroundMesh(thr)
@@ -99,6 +104,53 @@ def generate(a=0.1, L=1.0, h_hole=0.02, h_far=0.1, level=0, output="kirsch.msh",
     return output
 
 
+def count_nodes(path):
+    """Number of nodes from the $Nodes header of a .msh 4.1 file (all nodes are used:
+    the file only contains elements of physical groups)."""
+    with open(path) as f:
+        for line in f:
+            if line.strip() == "$Nodes":
+                return int(f.readline().split()[1])
+    raise ValueError(f"{path}: no $Nodes section")
+
+
+def generate_target_dofs(target_dofs, tol=0.03, output="kirsch.msh", verbose=True, **kw):
+    """Find the scale s for which the mesh has 2 * nodes within +-tol of target_dofs.
+
+    The node count of a 2D mesh grows like s^-2, so the first guess comes from one coarse
+    probe; then bisection on log(s) between a bracket on either side of the target.
+    Returns (scale, dofs, number of meshes generated, seconds).
+    """
+    t0 = time.time()
+    tries = 0
+
+    def dofs_at(s):
+        nonlocal tries
+        tries += 1
+        generate(output=output, scale=s, **kw)
+        d = 2 * count_nodes(output)
+        if verbose:
+            print(f"  try {tries}: scale {s:.6f} -> {d} DOFs ({100 * (d / target_dofs - 1):+.2f} %)")
+        return d
+
+    s = 1.0
+    d = dofs_at(s)
+    lo = hi = None  # lo: scale giving too many DOFs (finer), hi: too few (coarser)
+    for _ in range(60):
+        if abs(d / target_dofs - 1) <= tol:
+            return s, d, tries, time.time() - t0
+        if d > target_dofs:
+            lo = s
+        else:
+            hi = s
+        if lo is not None and hi is not None:
+            s = math.sqrt(lo * hi)  # bisection on log(s)
+        else:
+            s = s * math.sqrt(d / target_dofs)  # dofs ~ s^-2
+        d = dofs_at(s)
+    raise RuntimeError(f"no scale within {tol:.0%} of {target_dofs} DOFs after {tries} meshes")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--a", type=float, default=0.1, help="hole radius (default 0.1)")
@@ -106,11 +158,24 @@ def main(argv=None):
     p.add_argument("--h-hole", type=float, default=0.02, help="size at the hole, level 0")
     p.add_argument("--h-far", type=float, default=0.1, help="size far from the hole, level 0")
     p.add_argument("--level", type=int, default=0, help="refinement level; h scales by 2^-level")
+    p.add_argument("--scale", type=float, default=1.0,
+                   help="extra factor on h_hole and h_far (combinable with --level)")
+    p.add_argument("--target-dofs", type=float, default=None,
+                   help="search --scale so that DOFs = 2 x nodes is within +-3 %% of this value")
     p.add_argument("-o", "--output", default="meshes/kirsch_L0.msh")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
-    out = generate(args.a, args.L, args.h_hole, args.h_far, args.level, args.output, args.verbose)
-    print(f"wrote {out}")
+    common = dict(a=args.a, L=args.L, h_hole=args.h_hole, h_far=args.h_far, level=args.level)
+    if args.target_dofs is not None:
+        s, dofs, tries, secs = generate_target_dofs(int(args.target_dofs), output=args.output,
+                                                    **common)
+        print(f"wrote {args.output}: scale {s:.6f} (level {args.level}), {dofs} DOFs "
+              f"({100 * (dofs / args.target_dofs - 1):+.2f} % of {int(args.target_dofs)}), "
+              f"{tries} meshes generated in {secs:.1f} s")
+        return 0
+    t0 = time.time()
+    out = generate(output=args.output, verbose=args.verbose, scale=args.scale, **common)
+    print(f"wrote {out}: {2 * count_nodes(out)} DOFs in {time.time() - t0:.1f} s")
     return 0
 
 

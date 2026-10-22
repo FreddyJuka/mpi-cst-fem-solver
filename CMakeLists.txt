@@ -80,6 +80,8 @@ endif()
 add_executable(cstfem_solve src/main.cpp)
 target_link_libraries(cstfem_solve PRIVATE cstfem)
 
+add_subdirectory(benchmarks)
+
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)

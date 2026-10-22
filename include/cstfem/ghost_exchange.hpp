@@ -29,8 +29,14 @@ public:
   // ghosts[k] <- owner's value of ghost_globals[k]; `owned` is indexed by owned local index
   // (global id - offsets[rank]). Split so that local work can overlap the communication.
   void begin_forward(const double* owned);
-  void end_forward(double* ghosts);
+  void end_forward(double* ghosts);  // = wait_forward() + unpack_forward(ghosts)
+  void wait_forward();               // MPI_Waitall only
+  void unpack_forward(double* ghosts);
   void forward(const double* owned, double* ghosts);
+
+  // Values and messages this rank sends in one forward exchange.
+  std::size_t forward_send_values() const { return send_index_.size(); }
+  int forward_send_messages() const { return forward_send_messages_; }
 
   // Sends ghosts[k] to the owner. Returns the received contributions; entry i belongs to the
   // owned local index reverse_targets()[i] (several entries may target the same index).
@@ -43,6 +49,7 @@ private:
   MPI_Comm comm_ = MPI_COMM_NULL;
   std::vector<int> ghost_globals_;
   int num_neighbors_ = 0;
+  int forward_send_messages_ = 0;
 
   // Forward direction: send owned values at send_index_ (grouped by destination rank),
   // receive into ghost positions recv_pos_ (grouped by source rank).

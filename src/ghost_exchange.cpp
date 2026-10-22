@@ -76,6 +76,7 @@ GhostExchange::GhostExchange(std::vector<int> ghost_globals, const std::vector<i
   for (int q = 0; q < size; ++q) {
     if (send_counts[q] > 0 || recv_counts[q] > 0) ++num_neighbors_;
     if (send_counts[q] > 0) {
+      ++forward_send_messages_;
       MPI_Request r;
       MPI_Send_init(fwd_send_.data() + send_displs[q], send_counts[q], MPI_DOUBLE, q,
                     kForwardTag, comm_, &r);
@@ -108,11 +109,19 @@ void GhostExchange::begin_forward(const double* owned) {
     MPI_Startall(static_cast<int>(fwd_requests_.size()), fwd_requests_.data());
 }
 
-void GhostExchange::end_forward(double* ghosts) {
+void GhostExchange::wait_forward() {
   if (!fwd_requests_.empty())
     MPI_Waitall(static_cast<int>(fwd_requests_.size()), fwd_requests_.data(),
                 MPI_STATUSES_IGNORE);
+}
+
+void GhostExchange::unpack_forward(double* ghosts) {
   for (std::size_t i = 0; i < recv_pos_.size(); ++i) ghosts[recv_pos_[i]] = fwd_recv_[i];
+}
+
+void GhostExchange::end_forward(double* ghosts) {
+  wait_forward();
+  unpack_forward(ghosts);
 }
 
 void GhostExchange::forward(const double* owned, double* ghosts) {

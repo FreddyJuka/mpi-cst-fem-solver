@@ -58,6 +58,10 @@ CaseSettings read_case_settings(const CaseFile& c) {
   if (partitioner != "metis" && partitioner != "parmetis")
     throw std::runtime_error(c.source() + ": partitioner must be metis or parmetis");
   s.partitioner = partitioner;
+  const std::string instrument = c.get_string("instrument", "true");
+  if (instrument != "true" && instrument != "false")
+    throw std::runtime_error(c.source() + ": instrument must be true or false");
+  s.instrument = instrument == "true";
   s.path = c.get_string("path", "auto");
   if (s.path != "auto" && s.path != "serial" && s.path != "distributed")
     throw std::runtime_error(c.source() + ": path must be auto, serial or distributed, got '" +
@@ -69,6 +73,26 @@ CaseSettings read_case_settings(const CaseFile& c) {
   s.solver.rtol = c.get_double("rtol", 1e-10);
   s.solver.max_iter = c.get_int("max_iter", 20000);
   return s;
+}
+
+std::vector<std::pair<std::string, double>> breakdown_values(const SolveBreakdown& bd,
+                                                             int iterations) {
+  const double per_spmv = bd.spmv_calls > 0 ? 1.0 / static_cast<double>(bd.spmv_calls) : 0.0;
+  return {{"setup", bd.setup},
+          {"spmv_local", bd.spmv_local},
+          {"halo_post", bd.halo_post},
+          {"halo_wait", bd.halo_wait},
+          {"spmv_ghost", bd.spmv_ghost},
+          {"dot_local", bd.dot_local},
+          {"allreduce", bd.allreduce},
+          {"vector_ops", bd.vector_ops},
+          {"unaccounted", bd.total - bd.accounted()},
+          {"total", bd.total},
+          {"time_per_iteration", iterations > 0 ? bd.total / iterations : 0.0},
+          {"accounted_fraction", bd.total > 0 ? bd.accounted() / bd.total : 0.0},
+          {"halo_bytes_sent_per_iteration", static_cast<double>(bd.halo_bytes_sent) * per_spmv},
+          {"halo_messages_sent_per_iteration",
+           static_cast<double>(bd.halo_messages_sent) * per_spmv}};
 }
 
 std::string resolve_path(const CaseSettings& s, int nranks) {
@@ -83,7 +107,7 @@ const std::vector<std::string>& known_case_keys() {
   static const std::vector<std::string> keys = {
       "mesh",   "plane",    "E",          "nu",           "thickness",   "partitioner",
       "solver", "rtol",     "max_iter",   "output_dir",   "bc.dirichlet", "bc.traction",
-      "kirsch.sigma_inf", "kirsch.a", "path"};
+      "kirsch.sigma_inf", "kirsch.a", "path", "instrument"};
   return keys;
 }
 
@@ -135,6 +159,9 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
     // ---- solve
     t0 = Clock::now();
     CgJacobiSolver solver(s.solver);
+    SolveBreakdown bd;
+    bd.clock = steady_seconds;
+    if (s.instrument) solver.set_breakdown(&bd);
     solver.setup(K);
     std::vector<double> u;
     const SolverStats st = solver.solve(f, u);
@@ -203,7 +230,21 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
        << "    \"true_rel_residual\": " << num(st.true_rel_residual) << ",\n"
        << "    \"converged\": " << (st.converged ? "true" : "false") << "\n"
        << "  },\n"
-       << "  \"timings\": {\n"
+       << "  \"solve_breakdown\": ";
+    if (s.instrument) {
+      // One rank: min = max = mean.
+      const auto values = breakdown_values(bd, st.iterations);
+      js << "{\n";
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        const std::string v = num(values[i].second);
+        js << "    " << str(values[i].first) << ": {\"min\": " << v << ", \"max\": " << v
+           << ", \"mean\": " << v << "}" << (i + 1 < values.size() ? "," : "") << "\n";
+      }
+      js << "  },\n";
+    } else {
+      js << "null,\n";
+    }
+    js << "  \"timings\": {\n"
        << "    \"read\": " << num(t_read) << ",\n"
        << "    \"assembly\": " << num(t_assembly) << ",\n"
        << "    \"bcs\": " << num(t_bcs) << ",\n"

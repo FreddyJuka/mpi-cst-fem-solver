@@ -3,6 +3,7 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "cstfem/case.hpp"
@@ -22,11 +23,18 @@ struct CaseSettings {
   std::string mesh_path, output_dir, plane_name;
   std::string path = "auto";
   std::string partitioner = "metis";
+  bool instrument = true;  // `instrument = true|false`: solver time breakdown
   PlaneCondition plane = PlaneCondition::Stress;
   double E = 0, nu = 0, thickness = 0;
   SolverOptions solver;
 };
 CaseSettings read_case_settings(const CaseFile& c);
+
+// Named values of a solve breakdown for reporting, in a fixed order: the timed components,
+// "unaccounted" (total - sum of components), "total", "time_per_iteration",
+// "accounted_fraction", and the halo traffic per SpMV (one SpMV per iteration).
+std::vector<std::pair<std::string, double>> breakdown_values(const SolveBreakdown& bd,
+                                                             int iterations);
 
 // Keys understood by the solver; others trigger a warning.
 const std::vector<std::string>& known_case_keys();

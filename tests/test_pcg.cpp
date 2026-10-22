@@ -180,6 +180,27 @@ void test_true_residual_reporting() {
   CHECK(!sn.converged && sn.warning.empty() && sn.true_rel_residual > 0.0);
 }
 
+void test_serial_breakdown() {
+  // Large enough that fixed per-solve costs (e.g. building the message) stay well below 5 %.
+  std::mt19937 gen(21);
+  const int n = 400;
+  const CsrMatrix K = dense_to_csr(random_spd(n, gen), n);
+  std::vector<double> b(n, 1.0), x_off, x_on;
+  CgJacobiSolver off({1e-12, 1000, false}), on({1e-12, 1000, false});
+  SolveBreakdown bd;
+  bd.clock = steady_seconds;
+  on.set_breakdown(&bd);
+  off.setup(K);
+  on.setup(K);
+  const SolverStats so = off.solve(b, x_off), sn = on.solve(b, x_on);
+  CHECK(so.iterations == sn.iterations);
+  CHECK(x_off == x_on);  // bit-identical
+  CHECK(bd.total > 0.0 && std::abs(bd.accounted() / bd.total - 1.0) <= 0.05);
+  CHECK(bd.spmv_calls == sn.iterations + 1);
+  CHECK(bd.halo_bytes_sent == 0 && bd.allreduce == 0.0 && bd.halo_wait == 0.0);
+  std::printf("  serial breakdown: accounted fraction %.4f\n", bd.accounted() / bd.total);
+}
+
 void test_bad_diagonal() {
   CsrMatrix K = dense_to_csr({2.0, 1.0, 1.0, -1.0}, 2);
   CgJacobiSolver solver;
@@ -193,6 +214,7 @@ int main() {
   RUN_TEST(test_zero_rhs);
   RUN_TEST(test_not_converged);
   RUN_TEST(test_true_residual_reporting);
+  RUN_TEST(test_serial_breakdown);
   RUN_TEST(test_bad_diagonal);
   return test_summary();
 }

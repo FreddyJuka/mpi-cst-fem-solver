@@ -367,6 +367,44 @@ void test_serial_equivalence() {
   }
 }
 
+// Solver instrumentation: components sum to the measured solve time (within 5 % on every
+// rank), counters are consistent, and the solution is bit-identical with timing on and off.
+void test_solve_breakdown() {
+  Parallel p = build(data("kirsch_L1.msh"), PlaneCondition::Stress);
+  DirichletDofs local;
+  std::vector<double> f_local(p.layout.n_local, 0.0);
+  add_dirichlet(p.dm.local, parse_dirichlet("left_sym:ux=0 ; bottom_sym:uy=0"), local);
+  add_traction(p.dm.local, "right", kT, kirsch_traction(kKirsch), f_local);
+  add_traction(p.dm.local, "top", kT, kirsch_traction(kKirsch), f_local);
+  std::vector<double> b = accumulate_owned(p.layout, f_local);
+  apply_dirichlet_distributed(p.dm, p.layout, local, p.A, b, MPI_COMM_WORLD);
+  const SolverOptions opt{1e-10, 20000, false};
+
+  std::vector<double> u_off, u_on;
+  const SolverStats s_off = solve_distributed(p.A, b, u_off, opt, MPI_COMM_WORLD);
+  SolveBreakdown bd;
+  const SolverStats s_on = solve_distributed(p.A, b, u_on, opt, MPI_COMM_WORLD, &bd);
+
+  CHECK(s_off.iterations == s_on.iterations);
+  CHECK(u_off.size() == u_on.size() &&
+        std::equal(u_off.begin(), u_off.end(), u_on.begin()));  // bit-identical
+  const double frac = bd.accounted() / bd.total;
+  CHECK(bd.total > 0.0);
+  CHECK(std::abs(frac - 1.0) <= 0.05);
+  CHECK(bd.spmv_calls == s_on.iterations + 1);  // one per iteration + the true residual
+  CHECK(bd.halo_bytes_sent == bd.spmv_calls * static_cast<long long>(
+                                  p.A.halo->forward_send_values() * sizeof(double)));
+  if (g_size == 1) CHECK(bd.halo_bytes_sent == 0 && bd.allreduce >= 0.0);
+
+  double fmin = 0.0, fmax = 0.0;
+  MPI_Reduce(&frac, &fmin, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&frac, &fmax, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+  if (g_rank == 0)
+    std::printf("  breakdown: %d iterations, accounted fraction over ranks %.4f .. %.4f, "
+                "solution identical with timing on/off\n",
+                s_on.iterations, fmin, fmax);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -382,7 +420,8 @@ int main(int argc, char** argv) {
   const std::pair<const char*, void (*)()> tests[] = {{"test_spmv", test_spmv},
                                                       {"test_matrix_and_bcs", test_matrix_and_bcs},
                                                       {"test_patch", test_patch},
-                                                      {"test_serial_equivalence", test_serial_equivalence}};
+                                                      {"test_serial_equivalence", test_serial_equivalence},
+                                                      {"test_solve_breakdown", test_solve_breakdown}};
   for (const auto& [name, fn] : tests) {
     const int before = g_failures;
     fn();

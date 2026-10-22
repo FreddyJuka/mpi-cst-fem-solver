@@ -32,8 +32,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/apt-debs
           key: apt-${{ runner.os }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.pkgs }}
+          # Any image version: a newer image restores the previous .deb files and apt then
+          # downloads only the packages whose versions changed.
           restore-keys: |
-            apt-${{ runner.os }}-${{ steps.key.outputs.image }}-
+            apt-${{ runner.os }}-
 
       - name: Install dependencies
         id: install

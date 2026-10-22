@@ -209,8 +209,22 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
   // ---- solve
   timer.start();
   std::vector<double> u;
-  const SolverStats st = solve_distributed(A, b, u, s.solver, comm);
+  SolveBreakdown bd;
+  const SolverStats st =
+      solve_distributed(A, b, u, s.solver, comm, s.instrument ? &bd : nullptr);
   timer.stop("solve");
+  // (min, max, mean) over ranks of each breakdown value, valid on rank 0.
+  std::vector<std::pair<std::string, std::array<double, 3>>> breakdown;
+  if (s.instrument) {
+    const auto values = breakdown_values(bd, st.iterations);
+    const int n = static_cast<int>(values.size());
+    std::vector<double> mine(n), mn(n), mx(n), sum(n);
+    for (int i = 0; i < n; ++i) mine[i] = values[i].second;
+    MPI_Reduce(mine.data(), mn.data(), n, MPI_DOUBLE, MPI_MIN, 0, comm);
+    MPI_Reduce(mine.data(), mx.data(), n, MPI_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(mine.data(), sum.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
+    for (int i = 0; i < n; ++i) breakdown.push_back({values[i].first, {mn[i], mx[i], sum[i] / nranks}});
+  }
   if (rank == 0) {
     out << "cg_jacobi: " << st.message << "; true relative residual " << st.true_rel_residual
         << "\n";
@@ -275,6 +289,14 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
           << "): numerical " << metrics->scf_numerical << ", analytical "
           << metrics->scf_analytical_centroid << ", theoretical 3\n";
     print_load_report(load, out);
+    if (!breakdown.empty()) {
+      out << "solve breakdown [s] (min / max / mean over ranks; last rows: per-iteration "
+             "time, accounted fraction, halo bytes and messages sent per iteration):\n";
+      for (const auto& [name, v] : breakdown)
+        out << "  " << std::left << std::setw(33) << name << std::right << std::setw(12)
+            << std::setprecision(4) << v[0] << std::setw(12) << v[1] << std::setw(12) << v[2]
+            << "\n";
+    }
     out << "time per phase [s] (min / max / mean over ranks):\n";
     for (std::size_t i = 0; i < stats.size(); ++i)
       out << "  " << std::left << std::setw(11) << timer.phases()[i] << std::right
@@ -312,7 +334,20 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
        << "    \"true_rel_residual\": " << json_number(st.true_rel_residual) << ",\n"
        << "    \"converged\": " << (st.converged ? "true" : "false") << "\n"
        << "  },\n"
-       << "  \"timings\": {\n";
+       << "  \"solve_breakdown\": ";
+    if (breakdown.empty()) {
+      js << "null,\n";
+    } else {
+      js << "{\n";
+      for (std::size_t i = 0; i < breakdown.size(); ++i) {
+        const auto& v = breakdown[i].second;
+        js << "    " << json_string(breakdown[i].first) << ": {\"min\": " << json_number(v[0])
+           << ", \"max\": " << json_number(v[1]) << ", \"mean\": " << json_number(v[2]) << "}"
+           << (i + 1 < breakdown.size() ? "," : "") << "\n";
+      }
+      js << "  },\n";
+    }
+    js << "  \"timings\": {\n";
     for (std::size_t i = 0; i < stats.size(); ++i)
       js << "    " << json_string(timer.phases()[i]) << ": {\"min\": " << json_number(stats[i][0])
          << ", \"max\": " << json_number(stats[i][1]) << ", \"mean\": "

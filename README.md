@@ -37,6 +37,7 @@ Case keys that select how the problem is run:
 |---|---|---|
 | `path` | `auto` (default), `serial`, `distributed` | `auto`: serial code for 1 rank, distributed otherwise. `distributed` on 1 rank runs the full distributed code path (the fair baseline for speedup studies). `serial` with more than 1 rank is an error. |
 | `partitioner` | `metis` (default), `parmetis` | METIS on rank 0, or ParMETIS on all ranks (needs `-DUSE_PARMETIS=ON`). |
+| `instrument` | `true` (default), `false` | Per-rank time breakdown of the solver (SpMV local/ghost, halo post/wait, dot products, Allreduce, vector operations, halo bytes and messages per iteration), written to `timings.json` under `solve_breakdown`. The solution is identical either way. |
 
 Outputs in the case's `output_dir` (e.g. `results/kirsch_L2/`), for both paths:
 
@@ -53,6 +54,10 @@ mpiexec -n 4 ./build/cstfem_solve cases/kirsch_L3.case --partition-only
 ```
 
 which prints a partition report and writes `partition.pvtu` with one piece per rank (`partition_id` per cell, `owner_rank` per node).
+
+## Benchmarks
+
+`build/benchmarks/stream_triad [elements] [repetitions]` is a STREAM-like triad: each MPI rank runs it on its own arrays at the same time, e.g. `mpiexec -n 4 --bind-to core --map-by core build/benchmarks/stream_triad`, to see where memory bandwidth saturates.
 
 ## Tests
 
@@ -79,7 +84,7 @@ python/.venv/bin/python python/check_mesh.py meshes/kirsch_L2.msh
 
 The convergence study (levels 0-5, figures in `docs/figures/`) is run with `python/run_convergence.py --np 8`; the analytical displacement field is derived and checked with `python/derive_kirsch_displacement.py` (needs `python/requirements-dev.txt`, i.e. sympy).
 
-`mesh_kirsch.py --help` lists the parameters (`--a`, `--L`, `--h-hole`, `--h-far`, `--level`). A small level-0 mesh is committed as `tests/data/kirsch_L0.msh` for the reader tests.
+`mesh_kirsch.py --help` lists the parameters (`--a`, `--L`, `--h-hole`, `--h-far`, `--level`, `--scale`). `--scale s` multiplies both mesh sizes by `s` (combinable with `--level`); `--target-dofs N` searches `s` so that the mesh has `N` DOFs within ±3 % (for weak-scaling meshes). A small level-0 mesh is committed as `tests/data/kirsch_L0.msh` for the reader tests.
 
 ## Third-party dependencies
 

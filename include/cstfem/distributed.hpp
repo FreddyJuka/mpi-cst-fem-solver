@@ -72,28 +72,32 @@ void apply_dirichlet_distributed(const DistributedMesh& dm, DofLayout& layout,
 // y += A_ghost x_halo.
 class DistOperator : public LinearOperator {
 public:
-  explicit DistOperator(const DistMatrix& A) : A_(A), halo_values_(A.n_halo()) {}
+  explicit DistOperator(const DistMatrix& A, SolveBreakdown* bd = nullptr)
+      : A_(A), bd_(bd), halo_values_(A.n_halo()) {}
   void apply(const std::vector<double>& x, std::vector<double>& y) const override;
 
 private:
   const DistMatrix& A_;
+  SolveBreakdown* bd_;
   mutable std::vector<double> halo_values_;
 };
 
 // Local dot product + MPI_Allreduce.
 class DistReduction : public Reduction {
 public:
-  explicit DistReduction(MPI_Comm comm) : comm_(comm) {}
+  explicit DistReduction(MPI_Comm comm, SolveBreakdown* bd = nullptr) : comm_(comm), bd_(bd) {}
   double dot(const std::vector<double>& a, const std::vector<double>& b) const override;
 
 private:
   MPI_Comm comm_;
+  SolveBreakdown* bd_;
 };
 
 // Jacobi-PCG of cstfem_core with the distributed operator and inner product. Collective.
+// `timing` (optional, clock = MPI_Wtime is set here) receives this rank's breakdown.
 SolverStats solve_distributed(const DistMatrix& A, const std::vector<double>& b,
                               std::vector<double>& x, const SolverOptions& options,
-                              MPI_Comm comm);
+                              MPI_Comm comm, SolveBreakdown* timing = nullptr);
 
 // Kirsch metrics over all ranks: L2 sums via MPI_Allreduce, SCF element via MPI_MINLOC on
 // the centroid distance to (0, a), values broadcast from the winning rank. Collective.
