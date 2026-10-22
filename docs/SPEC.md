@@ -160,7 +160,7 @@ mpi-cst-fem-solver/
 
 ## 14. CI
 
-GitHub Actions on `ubuntu-latest`: install `libopenmpi-dev` and `libmetis-dev`, configure with default options (ParMETIS and PETSc OFF), build, run `ctest`.
+GitHub Actions on `ubuntu-24.04`: install `libopenmpi-dev` and `libmetis-dev`, configure with default options (ParMETIS and PETSc OFF), build, run `ctest`.
 
 ## 15. Milestones
 
