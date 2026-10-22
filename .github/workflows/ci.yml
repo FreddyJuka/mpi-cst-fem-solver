@@ -8,12 +8,70 @@ jobs:
   build-and-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      # CMake is not installed from apt: the runner image provides it (checked below).
+      APT_PACKAGES: build-essential libopenmpi-dev openmpi-bin libmetis-dev python3-numpy
+      APT_DEBS: ${{ runner.temp }}/apt-debs
     steps:
       - uses: actions/checkout@v7
-      - name: Install dependencies
+
+      # The apt mirror used by the runners is intermittently very slow (18 min for 59 MB seen
+      # twice), so the downloaded .deb files are cached. `apt-get update` still runs every
+      # time; the package lists are not cached.
+      - name: Compute apt cache key
+        id: key
         run: |
+          image="${ImageVersion:-unknown}"
+          pkgs="$(printf '%s' "$APT_PACKAGES" | sha256sum | cut -c1-16)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          echo "runner image version: $image; package list hash: $pkgs"
+
+      - name: Restore apt package cache
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.APT_DEBS }}
+          key: apt-${{ runner.os }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.pkgs }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ steps.key.outputs.image }}-
+
+      - name: Install dependencies
+        id: install
+        timeout-minutes: 5
+        run: |
+          shopt -s nullglob
+          mkdir -p "$APT_DEBS"
+          cached=("$APT_DEBS"/*.deb)
+          echo "cache hit: '${{ steps.cache.outputs.cache-hit }}', .deb files restored: ${#cached[@]}"
+          # /var/cache/apt/archives is root-owned: copy the restored files in with sudo.
+          if [ ${#cached[@]} -gt 0 ]; then sudo cp -p "${cached[@]}" /var/cache/apt/archives/; fi
           sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y build-essential cmake libopenmpi-dev openmpi-bin libmetis-dev python3-numpy
+          sudo apt-get -o Acquire::Retries=3 install -y $APT_PACKAGES
+          # Copy the .deb files back (not partial/ or lock) so that they can be cached.
+          debs=(/var/cache/apt/archives/*.deb)
+          if [ ${#debs[@]} -gt 0 ]; then cp -p "${debs[@]}" "$APT_DEBS"/; fi
+          echo "debs=${#debs[@]}" >> "$GITHUB_OUTPUT"
+          echo ".deb files in the cache directory: ${#debs[@]}; size: $(du -sh "$APT_DEBS" | cut -f1)"
+
+      # Saved right after a successful install, so a later build or test failure does not
+      # lose the cache. Skipped on an exact hit (the entry exists already).
+      - name: Save apt package cache
+        if: always() && steps.install.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && steps.install.outputs.debs != '0'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.APT_DEBS }}
+          key: apt-${{ runner.os }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.pkgs }}
+
+      - name: Check CMake version
+        run: |
+          cmake --version
+          v="$(cmake --version | head -n1 | awk '{print $3}')"
+          if [ "$(printf '%s\n' 3.20 "$v" | sort -V | head -n1)" != "3.20" ]; then
+            echo "::error::CMake $v is older than the required 3.20"
+            exit 1
+          fi
+
       - name: Configure
         run: cmake -S . -B build -DCSTFEM_MPI_OVERSUBSCRIBE=ON
       - name: Build
