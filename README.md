@@ -36,6 +36,23 @@ ctest --test-dir build --output-on-failure
 
 On OpenMPI with fewer physical cores than ranks, configure with `-DCSTFEM_MPI_OVERSUBSCRIBE=ON`.
 
+## Mesh generation
+
+The Kirsch quarter-plate meshes are generated with the Gmsh Python API (Python >= 3.10).
+
+```
+python3 -m venv python/.venv
+python/.venv/bin/pip install -r python/requirements.txt
+
+# level n halves the element size n times; output is Gmsh .msh 4.1 ASCII
+python/.venv/bin/python python/mesh_kirsch.py --level 2 -o meshes/kirsch_L2.msh
+
+# independent check (does not use gmsh): header, groups, orientation, geometry, quality
+python/.venv/bin/python python/check_mesh.py meshes/kirsch_L2.msh
+```
+
+`mesh_kirsch.py --help` lists the parameters (`--a`, `--L`, `--h-hole`, `--h-far`, `--level`). A small level-0 mesh is committed as `tests/data/kirsch_L0.msh` for the reader tests.
+
 ## Third-party dependencies
 
 | Dependency | Use | License |

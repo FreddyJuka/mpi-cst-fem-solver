@@ -27,3 +27,5 @@ venv/
 *~
 .DS_Store
 *:Zone.Identifier
+python/.venv/
+meshes/
