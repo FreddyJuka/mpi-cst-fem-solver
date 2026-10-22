@@ -61,15 +61,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(cstfem_core PUBLIC -Wall -Wextra -Wpedantic)
 endif()
 
-# Parallel layer: core + MPI + METIS. Interface-only until it has MPI sources (Milestone 4).
-add_library(cstfem INTERFACE)
-target_link_libraries(cstfem INTERFACE cstfem_core MPI::MPI_CXX METIS::METIS)
+# Parallel layer: everything that uses MPI or METIS. Never linked into cstfem_core.
+add_library(cstfem
+  src/mpi_util.cpp
+  src/parallel_driver.cpp
+  src/partition.cpp)
+target_link_libraries(cstfem PUBLIC cstfem_core MPI::MPI_CXX METIS::METIS)
 # Optional backends are exposed only through the generated config.hpp (USE_* macros).
 if(USE_PARMETIS)
-  target_link_libraries(cstfem INTERFACE ParMETIS::ParMETIS)
+  target_link_libraries(cstfem PUBLIC ParMETIS::ParMETIS)
 endif()
 if(USE_PETSC)
-  target_link_libraries(cstfem INTERFACE PkgConfig::PETSC)
+  target_link_libraries(cstfem PUBLIC PkgConfig::PETSC)
 endif()
 
 add_executable(cstfem_solve src/main.cpp)

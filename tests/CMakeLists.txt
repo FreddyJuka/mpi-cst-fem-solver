@@ -37,6 +37,18 @@ foreach(n 1 2 4)
   set_tests_properties(mpi_smoke_np${n} PROPERTIES ENVIRONMENT "${_mpi_env}")
 endforeach()
 
+# ---- Partitioning, distribution, ownership (MPI)
+add_executable(test_partition test_partition.cpp)
+target_link_libraries(test_partition PRIVATE cstfem)
+target_compile_definitions(test_partition PRIVATE
+  CSTFEM_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+foreach(n 1 2 3 4)
+  add_test(NAME test_partition_np${n}
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${n} ${_mpi_extra}
+            $<TARGET_FILE:test_partition> ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(test_partition_np${n} PROPERTIES ENVIRONMENT "${_mpi_env}")
+endforeach()
+
 # ---- End-to-end Kirsch runs of cstfem_solve on the committed L0 and L1 meshes
 set(_e2e_dirs "${CMAKE_CURRENT_BINARY_DIR}/e2e_kirsch_L0" "${CMAKE_CURRENT_BINARY_DIR}/e2e_kirsch_L1")
 # Remove old outputs first so the checks only see files written by this run.
