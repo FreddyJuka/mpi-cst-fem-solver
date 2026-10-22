@@ -25,6 +25,7 @@ using namespace cstfem;
 namespace {
 
 int g_rank = 0, g_size = 1, g_failures = 0;
+Partitioner g_partitioner = Partitioner::Metis;  // --partitioner=parmetis
 const double kE = 210e9, kNu = 0.3, kT = 0.01;
 const KirschParams kKirsch{100e6, 0.1};
 
@@ -108,7 +109,7 @@ struct Parallel {
 
 Parallel build(const std::string& path, PlaneCondition plane) {
   Parallel p;
-  p.dm = read_partition_distribute(path, MPI_COMM_WORLD);
+  p.dm = read_partition_distribute(path, MPI_COMM_WORLD, nullptr, g_partitioner);
   p.layout = make_dof_layout(p.dm, MPI_COMM_WORLD);
   p.A = assemble_distributed(p.dm, p.layout, constitutive_matrix(kE, kNu, plane), kT,
                              MPI_COMM_WORLD);
@@ -363,7 +364,11 @@ int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
   MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &g_size);
-  if (g_rank == 0) std::printf("test_distributed on %d rank(s)\n", g_size);
+  for (int i = 1; i < argc; ++i)
+    if (std::string(argv[i]) == "--partitioner=parmetis") g_partitioner = Partitioner::ParMetis;
+  if (g_rank == 0)
+    std::printf("test_distributed on %d rank(s), partitioner %s\n", g_size,
+                partitioner_name(g_partitioner).c_str());
 
   const std::pair<const char*, void (*)()> tests[] = {{"test_spmv", test_spmv},
                                                       {"test_matrix_and_bcs", test_matrix_and_bcs},

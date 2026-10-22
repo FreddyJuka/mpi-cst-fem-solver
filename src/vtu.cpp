@@ -1,5 +1,6 @@
 #include "cstfem/vtu.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -30,17 +31,21 @@ void write_arrays(std::ostream& out, const std::vector<VtuArray>& arrays, std::s
                   const char* what) {
   for (const auto& a : arrays) {
     const std::size_t expected = count * static_cast<std::size_t>(a.components);
-    const std::size_t actual = a.i32.empty() ? a.f64.size() : a.i32.size();
+    const std::size_t actual =
+        !a.i32.empty() ? a.i32.size() : !a.i64.empty() ? a.i64.size() : a.f64.size();
     if (actual != expected)
       throw std::runtime_error(std::string("vtu: ") + what + " array '" + a.name + "' has " +
                                std::to_string(actual) + " values, expected " +
                                std::to_string(expected));
-    if (a.i32.empty())
-      write_data_array(out, "Float64", a.name, a.components, a.f64.data(),
-                       a.f64.size() * sizeof(double));
-    else
+    if (!a.i32.empty())
       write_data_array(out, "Int32", a.name, a.components, a.i32.data(),
                        a.i32.size() * sizeof(std::int32_t));
+    else if (!a.i64.empty())
+      write_data_array(out, "Int64", a.name, a.components, a.i64.data(),
+                       a.i64.size() * sizeof(std::int64_t));
+    else
+      write_data_array(out, "Float64", a.name, a.components, a.f64.data(),
+                       a.f64.size() * sizeof(double));
   }
 }
 
@@ -90,7 +95,9 @@ std::string base64_encode(const void* data, std::size_t size) {
 
 std::vector<VtuArrayInfo> array_infos(const std::vector<VtuArray>& arrays) {
   std::vector<VtuArrayInfo> infos;
-  for (const auto& a : arrays) infos.push_back({a.name, a.components, !a.i32.empty()});
+  for (const auto& a : arrays)
+    infos.push_back({a.name, a.components,
+                     !a.i32.empty() ? "Int32" : !a.i64.empty() ? "Int64" : "Float64"});
   return infos;
 }
 
@@ -133,7 +140,7 @@ void write_pvtu(const std::string& path, const std::vector<std::string>& piece_s
                 const std::vector<VtuArrayInfo>& point_data,
                 const std::vector<VtuArrayInfo>& cell_data) {
   auto pdata = [](std::ostream& out, const VtuArrayInfo& i) {
-    out << "      <PDataArray type=\"" << (i.is_int ? "Int32" : "Float64") << "\" Name=\""
+    out << "      <PDataArray type=\"" << i.type << "\" Name=\""
         << i.name << "\" NumberOfComponents=\"" << i.components << "\"/>\n";
   };
   auto out = open(path);
@@ -151,6 +158,11 @@ void write_pvtu(const std::string& path, const std::vector<std::string>& piece_s
   for (const auto& s : piece_sources) out << "    <Piece Source=\"" << s << "\"/>\n";
   out << "  </PUnstructuredGrid>\n</VTKFile>\n";
   if (!out) throw std::runtime_error(path + ": write failed");
+}
+
+void remove_stale_pieces(const std::string& dir, const std::string& base, int first) {
+  for (int r = first;; ++r)
+    if (!std::filesystem::remove(dir + "/" + base + "_" + std::to_string(r) + ".vtu")) break;
 }
 
 }  // namespace cstfem

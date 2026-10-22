@@ -11,6 +11,7 @@
 #include "cstfem/assembly.hpp"
 #include "cstfem/bc.hpp"
 #include "cstfem/config.hpp"
+#include "cstfem/json.hpp"
 #include "cstfem/postprocess.hpp"
 #include "cstfem/solver.hpp"
 #include "cstfem/vtu.hpp"
@@ -25,22 +26,8 @@ double seconds_since(Clock::time_point t0) {
   return std::chrono::duration<double>(Clock::now() - t0).count();
 }
 
-// JSON number with full precision; non-finite values become null.
-std::string num(double v) {
-  if (!std::isfinite(v)) return "null";
-  char buf[32];
-  std::snprintf(buf, sizeof buf, "%.17g", v);
-  return buf;
-}
-
-std::string str(const std::string& s) {
-  std::string out = "\"";
-  for (char c : s) {
-    if (c == '"' || c == '\\') out += '\\';
-    out += c;
-  }
-  return out + "\"";
-}
+std::string num(double v) { return json_number(v); }
+std::string str(const std::string& s) { return json_string(s); }
 
 }  // namespace
 
@@ -70,6 +57,11 @@ CaseSettings read_case_settings(const CaseFile& c) {
                              "(configure with -DUSE_PARMETIS=ON)");
   if (partitioner != "metis" && partitioner != "parmetis")
     throw std::runtime_error(c.source() + ": partitioner must be metis or parmetis");
+  s.partitioner = partitioner;
+  s.path = c.get_string("path", "auto");
+  if (s.path != "auto" && s.path != "serial" && s.path != "distributed")
+    throw std::runtime_error(c.source() + ": path must be auto, serial or distributed, got '" +
+                             s.path + "'");
   const std::string solver = c.get_string("solver", "cg_jacobi");
   if (solver != "cg_jacobi")
     throw std::runtime_error(c.source() + ": solver '" + solver +
@@ -79,11 +71,19 @@ CaseSettings read_case_settings(const CaseFile& c) {
   return s;
 }
 
+std::string resolve_path(const CaseSettings& s, int nranks) {
+  if (s.path == "serial" && nranks > 1)
+    throw std::runtime_error("path = serial needs exactly 1 rank (launched with " +
+                             std::to_string(nranks) + "); use path = auto or distributed");
+  if (s.path == "auto") return nranks == 1 ? "serial" : "distributed";
+  return s.path;
+}
+
 const std::vector<std::string>& known_case_keys() {
   static const std::vector<std::string> keys = {
       "mesh",   "plane",    "E",          "nu",           "thickness",   "partitioner",
       "solver", "rtol",     "max_iter",   "output_dir",   "bc.dirichlet", "bc.traction",
-      "kirsch.sigma_inf", "kirsch.a"};
+      "kirsch.sigma_inf", "kirsch.a", "path"};
   return keys;
 }
 
@@ -147,47 +147,25 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
     // ---- stresses and output
     t0 = Clock::now();
     std::filesystem::create_directories(s.output_dir);
+    remove_stale_pieces(s.output_dir, "solution", 1);
     const std::filesystem::path dir(s.output_dir);
     const ElementStresses es = compute_element_stresses(mesh, u, D, s.nu, s.plane);
     const std::size_t ne = mesh.num_triangles();
 
-    std::vector<VtuArray> point_data(1);
-    point_data[0].name = "displacement";
-    point_data[0].components = 3;
-    point_data[0].f64.resize(3 * mesh.num_nodes(), 0.0);
-    for (std::size_t n = 0; n < mesh.num_nodes(); ++n) {
-      point_data[0].f64[3 * n] = u[2 * n];
-      point_data[0].f64[3 * n + 1] = u[2 * n + 1];
-    }
-    std::vector<VtuArray> cell_data = {{"sigma_xx", 1, es.sxx, {}},
-                                       {"sigma_yy", 1, es.syy, {}},
-                                       {"tau_xy", 1, es.txy, {}},
-                                       {"von_mises", 1, es.von_mises, {}}};
-    if (s.plane == PlaneCondition::Strain) cell_data.push_back({"sigma_zz", 1, es.szz, {}});
-    cell_data.push_back({"partition_id", 1, {}, std::vector<std::int32_t>(ne, 0)});
+    std::vector<int> element_ids(ne);
+    for (std::size_t e = 0; e < ne; ++e) element_ids[e] = static_cast<int>(e);
+    const SolutionPiece piece =
+        solution_arrays(mesh, u, es, s.plane, static_cast<int>(mesh.num_nodes()), 0, element_ids,
+                        kirsch);
+    const auto& point_data = piece.point_data;
+    const auto& cell_data = piece.cell_data;
 
     std::optional<KirschMetrics> metrics;
     if (kirsch) {
-      VtuArray ex{"sigma_xx_exact", 1, std::vector<double>(ne), {}};
-      VtuArray ey{"sigma_yy_exact", 1, std::vector<double>(ne), {}};
-      VtuArray et{"tau_xy_exact", 1, std::vector<double>(ne), {}};
-      VtuArray dx{"sigma_xx_error", 1, std::vector<double>(ne), {}};
-      VtuArray dy{"sigma_yy_error", 1, std::vector<double>(ne), {}};
-      VtuArray dt{"tau_xy_error", 1, std::vector<double>(ne), {}};
-      for (std::size_t e = 0; e < ne; ++e) {
-        const Vec3 a = kirsch_stress(*kirsch, es.cx[e], es.cy[e]);
-        ex.f64[e] = a[0];
-        ey.f64[e] = a[1];
-        et.f64[e] = a[2];
-        dx.f64[e] = es.sxx[e] - a[0];
-        dy.f64[e] = es.syy[e] - a[1];
-        dt.f64[e] = es.txy[e] - a[2];
-      }
-      for (auto* a : {&ex, &ey, &et, &dx, &dy, &dt}) cell_data.push_back(std::move(*a));
-
       metrics = kirsch_metrics(es, *kirsch);
-      write_hole_csv((dir / "hole_sigma_tt.csv").string(), mesh, es, *kirsch);
-      write_section_x0_csv((dir / "section_x0_sigma_xx.csv").string(), mesh, es, *kirsch);
+      write_hole_csv((dir / "hole_sigma_tt.csv").string(), hole_csv_rows(mesh, es, *kirsch));
+      write_section_x0_csv((dir / "section_x0_sigma_xx.csv").string(),
+                           section_x0_csv_rows(mesh, es, *kirsch));
       out << "Kirsch: relative L2 stress error " << metrics->l2_rel_stress_error
           << "; SCF at centroid (" << metrics->scf_x << ", " << metrics->scf_y
           << "): numerical " << metrics->scf_numerical << ", analytical "
@@ -208,6 +186,7 @@ int run_serial_case(const std::string& case_path, std::ostream& out, std::ostrea
        << "  \"case\": " << str(case_path) << ",\n"
        << "  \"mesh\": " << str(s.mesh_path) << ",\n"
        << "  \"ranks\": 1,\n"
+       << "  \"path\": \"serial\",\n"
        << "  \"plane\": " << str(s.plane_name) << ",\n"
        << "  \"nodes\": " << mesh.num_nodes() << ",\n"
        << "  \"elements\": " << ne << ",\n"

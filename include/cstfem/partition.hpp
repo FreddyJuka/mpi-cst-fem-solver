@@ -30,10 +30,25 @@ struct GlobalPartition {
   int interface_nodes = 0;   // nodes touched by more than one part
 };
 
-// METIS_PartMeshDual (ncommon = 2, fixed seed); nparts == 1 skips METIS.
+enum class Partitioner { Metis, ParMetis };
+std::string partitioner_name(Partitioner p);  // "metis" | "parmetis"
+
+// METIS_PartMeshDual (ncommon = 2, fixed seed) + build_partition(); nparts == 1 skips METIS.
 // Throws if the mesh does not fit METIS' idx_t, if a node is not used by any triangle, or if
 // a boundary edge is not adjacent to exactly one triangle.
 GlobalPartition partition_mesh(const Mesh& mesh, int nparts, int seed = kMetisSeed);
+
+// Ownership (lowest touching rank), contiguous global numbering and boundary-edge assignment
+// for a given element partition.
+GlobalPartition build_partition(const Mesh& mesh, std::vector<int> elem_part, int nparts,
+                                long long edge_cut);
+
+// ParMETIS_V3_PartMeshKway (ncommon = 2, fixed seed, uniform tpwgts, ubvec 1.05) on a block
+// distribution of the elements scattered from rank 0; the partition vector is gathered back
+// to rank 0 (the only rank that holds `mesh`; returned there, empty elsewhere). Collective.
+// Throws on every rank if ParMETIS was not compiled in.
+std::vector<int> parmetis_element_partition(const Mesh* mesh, MPI_Comm comm, int seed,
+                                            long long* edge_cut);
 
 // One rank's part of the distributed mesh.
 //
@@ -76,13 +91,22 @@ struct PartitionSummary {
   std::string mesh_path;
   long long edge_cut = 0;
   int interface_nodes = 0;
+  std::string partitioner = "metis";
 };
 
-// Rank 0 reads and partitions the mesh, then it is distributed. Errors on rank 0 are raised
-// on every rank. Collective.
+// This rank's wall time in each phase (each phase starts after an MPI_Barrier).
+struct PartitionTimings {
+  double read = 0.0, partition = 0.0, distribute = 0.0;
+};
+
+// Rank 0 reads the mesh; it is partitioned (METIS on rank 0, or ParMETIS on all ranks) and
+// distributed. Ownership, numbering and packaging run on rank 0 (v1). Errors are raised on
+// every rank. Collective.
 DistributedMesh read_partition_distribute(const std::string& mesh_path, MPI_Comm comm,
                                           PartitionSummary* summary = nullptr,
-                                          int seed = kMetisSeed);
+                                          Partitioner partitioner = Partitioner::Metis,
+                                          int seed = kMetisSeed,
+                                          PartitionTimings* timings = nullptr);
 
 // Per-rank and global partition report, printed by rank 0. Collective.
 void print_partition_report(const DistributedMesh& dm, const PartitionSummary& summary,

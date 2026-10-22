@@ -38,8 +38,10 @@ void test_piece_and_master() {
   // Unit square split into two triangles.
   const std::vector<double> xy = {0, 0, 1, 0, 1, 1, 0, 1};
   const std::vector<int> tri = {0, 1, 2, 0, 2, 3};
-  std::vector<VtuArray> pd = {{"displacement", 3, std::vector<double>(12, 0.5), {}}};
-  std::vector<VtuArray> cd = {{"sigma_xx", 1, {1.0, 2.0}, {}}, {"partition_id", 1, {}, {0, 0}}};
+  std::vector<VtuArray> pd = {{"displacement", 3, std::vector<double>(12, 0.5), {}, {}}};
+  std::vector<VtuArray> cd = {{"sigma_xx", 1, {1.0, 2.0}, {}, {}},
+                              {"partition_id", 1, {}, {0, 0}, {}},
+                              {"element_id", 1, {}, {}, {7, 1LL << 40}}};
   const std::string dir = CSTFEM_TEST_TMP_DIR;
   write_vtu_piece(dir + "/piece_0.vtu", xy, tri, pd, cd);
   write_pvtu(dir + "/master.pvtu", {"piece_0.vtu"}, array_infos(pd), array_infos(cd));
@@ -58,9 +60,11 @@ void test_piece_and_master() {
   CHECK(pvtu.find("<Piece Source=\"piece_0.vtu\"/>") != std::string::npos);
   CHECK(pvtu.find("Name=\"displacement\" NumberOfComponents=\"3\"") != std::string::npos);
   CHECK(pvtu.find("<PDataArray type=\"Int32\" Name=\"partition_id\"") != std::string::npos);
+  CHECK(pvtu.find("<PDataArray type=\"Int64\" Name=\"element_id\"") != std::string::npos);
+  CHECK(vtu.find("type=\"Int64\" Name=\"element_id\"") != std::string::npos);
 
   // Wrong array length is rejected.
-  std::vector<VtuArray> bad = {{"sigma_xx", 1, {1.0}, {}}};
+  std::vector<VtuArray> bad = {{"sigma_xx", 1, {1.0}, {}, {}}};
   CHECK_THROWS(write_vtu_piece(dir + "/bad.vtu", xy, tri, pd, bad),
                "cell array 'sigma_xx' has 1 values, expected 2");
 }

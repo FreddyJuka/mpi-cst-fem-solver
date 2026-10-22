@@ -1,11 +1,13 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "cstfem/element.hpp"
 #include "cstfem/kirsch.hpp"
 #include "cstfem/mesh.hpp"
+#include "cstfem/vtu.hpp"
 
 namespace cstfem {
 
@@ -45,12 +47,34 @@ KirschPartial kirsch_partial(const ElementStresses& s, const KirschParams& p);
 // Fills the SCF fields of `m` from element e.
 void set_scf(KirschMetrics& m, const ElementStresses& s, const KirschParams& p, int e);
 
-// Centroid values next to the analytical field (17 significant digits).
-// hole_sigma_tt.csv: x, y, r, theta, sigma_tt_num, sigma_tt_exact (sorted by theta).
-void write_hole_csv(const std::string& path, const Mesh& mesh, const ElementStresses& s,
-                    const KirschParams& p);
-// section_x0_sigma_xx.csv: x, y, sigma_xx_num, sigma_xx_exact (sorted by y).
-void write_section_x0_csv(const std::string& path, const Mesh& mesh, const ElementStresses& s,
-                          const KirschParams& p);
+// VTU arrays of one solution piece (serial: the whole mesh; distributed: one rank's local
+// mesh, owned nodes first).
+//   points: displacement (3 components, z = 0), owned (1/0: filter duplicates across pieces),
+//           gmsh_tag (Int64)
+//   cells:  sigma_xx, sigma_yy, tau_xy, von_mises, sigma_zz (plane strain only), partition_id,
+//           element_id (original file-order index), and for Kirsch the analytical stresses at
+//           the centroid and the errors (numerical - analytical).
+struct SolutionPiece {
+  std::vector<VtuArray> point_data, cell_data;
+};
+SolutionPiece solution_arrays(const Mesh& mesh, const std::vector<double>& u_local,
+                              const ElementStresses& es, PlaneCondition plane, int num_owned,
+                              int partition_id, const std::vector<int>& element_ids,
+                              const std::optional<KirschParams>& kirsch);
+
+// Kirsch CSV rows at element centroids, numerical next to analytical, flattened:
+//   hole (elements adjacent to `hole` edges), 6 per row:
+//     x, y, r, theta, sigma_tt_num, sigma_tt_exact
+//   section x = 0 (elements adjacent to `left_sym` edges), 4 per row:
+//     x, y, sigma_xx_num, sigma_xx_exact
+constexpr int kHoleCsvCols = 6;
+constexpr int kSectionCsvCols = 4;
+std::vector<double> hole_csv_rows(const Mesh& mesh, const ElementStresses& s,
+                                  const KirschParams& p);
+std::vector<double> section_x0_csv_rows(const Mesh& mesh, const ElementStresses& s,
+                                        const KirschParams& p);
+// Write the rows sorted by theta (hole) / y (section), 17 significant digits.
+void write_hole_csv(const std::string& path, std::vector<double> rows);
+void write_section_x0_csv(const std::string& path, std::vector<double> rows);
 
 }  // namespace cstfem

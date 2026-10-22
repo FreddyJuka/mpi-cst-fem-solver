@@ -10,19 +10,21 @@ namespace cstfem {
 // RFC 4648 base64 (standard alphabet, '=' padding).
 std::string base64_encode(const void* data, std::size_t size);
 
-// A named point or cell array. Float64 if `i32` is empty, otherwise Int32.
+// A named point or cell array: Int32 if `i32` is non-empty, else Int64 if `i64` is
+// non-empty, else Float64.
 struct VtuArray {
   std::string name;
   int components = 1;
   std::vector<double> f64;
   std::vector<std::int32_t> i32;
+  std::vector<std::int64_t> i64;
 };
 
 // Name, type and component count of an array (what a .pvtu master needs).
 struct VtuArrayInfo {
   std::string name;
   int components = 1;
-  bool is_int = false;
+  std::string type = "Float64";  // Float64 | Int32 | Int64
 };
 std::vector<VtuArrayInfo> array_infos(const std::vector<VtuArray>& arrays);
 
@@ -37,5 +39,9 @@ void write_vtu_piece(const std::string& path, const std::vector<double>& xy,
 void write_pvtu(const std::string& path, const std::vector<std::string>& piece_sources,
                 const std::vector<VtuArrayInfo>& point_data,
                 const std::vector<VtuArrayInfo>& cell_data);
+
+// Deletes <dir>/<base>_<r>.vtu for r = first, first + 1, ... while such files exist (pieces
+// left over from an earlier run with more ranks).
+void remove_stale_pieces(const std::string& dir, const std::string& base, int first);
 
 }  // namespace cstfem

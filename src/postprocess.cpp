@@ -109,30 +109,99 @@ KirschMetrics kirsch_metrics(const ElementStresses& s, const KirschParams& p) {
   return m;
 }
 
-void write_hole_csv(const std::string& path, const Mesh& mesh, const ElementStresses& s,
-                    const KirschParams& p) {
-  auto elems = elements_adjacent_to_group(mesh, "hole");
-  auto theta = [&](int e) { return std::atan2(s.cy[e], s.cx[e]); };
-  std::sort(elems.begin(), elems.end(), [&](int a, int b) { return theta(a) < theta(b); });
+SolutionPiece solution_arrays(const Mesh& mesh, const std::vector<double>& u_local,
+                              const ElementStresses& es, PlaneCondition plane, int num_owned,
+                              int partition_id, const std::vector<int>& element_ids,
+                              const std::optional<KirschParams>& kirsch) {
+  const std::size_t nn = mesh.num_nodes(), ne = mesh.num_triangles();
+  SolutionPiece out;
+  VtuArray disp{"displacement", 3, std::vector<double>(3 * nn, 0.0), {}, {}};
+  VtuArray owned{"owned", 1, {}, std::vector<std::int32_t>(nn, 0), {}};
+  VtuArray tags{"gmsh_tag", 1, {}, {}, std::vector<std::int64_t>(nn)};
+  for (std::size_t n = 0; n < nn; ++n) {
+    disp.f64[3 * n] = u_local[2 * n];
+    disp.f64[3 * n + 1] = u_local[2 * n + 1];
+    owned.i32[n] = static_cast<int>(n) < num_owned ? 1 : 0;
+    tags.i64[n] = static_cast<std::int64_t>(mesh.node_tags[n]);
+  }
+  out.point_data = {std::move(disp), std::move(owned), std::move(tags)};
+
+  auto& cd = out.cell_data;
+  cd = {{"sigma_xx", 1, es.sxx, {}, {}},
+        {"sigma_yy", 1, es.syy, {}, {}},
+        {"tau_xy", 1, es.txy, {}, {}},
+        {"von_mises", 1, es.von_mises, {}, {}}};
+  if (plane == PlaneCondition::Strain) cd.push_back({"sigma_zz", 1, es.szz, {}, {}});
+  cd.push_back({"partition_id", 1, {}, std::vector<std::int32_t>(ne, partition_id), {}});
+  cd.push_back({"element_id", 1, {}, {element_ids.begin(), element_ids.end()}, {}});
+  if (kirsch) {
+    VtuArray ex{"sigma_xx_exact", 1, std::vector<double>(ne), {}, {}};
+    VtuArray ey{"sigma_yy_exact", 1, std::vector<double>(ne), {}, {}};
+    VtuArray et{"tau_xy_exact", 1, std::vector<double>(ne), {}, {}};
+    VtuArray dx{"sigma_xx_error", 1, std::vector<double>(ne), {}, {}};
+    VtuArray dy{"sigma_yy_error", 1, std::vector<double>(ne), {}, {}};
+    VtuArray dt{"tau_xy_error", 1, std::vector<double>(ne), {}, {}};
+    for (std::size_t e = 0; e < ne; ++e) {
+      const Vec3 a = kirsch_stress(*kirsch, es.cx[e], es.cy[e]);
+      ex.f64[e] = a[0];
+      ey.f64[e] = a[1];
+      et.f64[e] = a[2];
+      dx.f64[e] = es.sxx[e] - a[0];
+      dy.f64[e] = es.syy[e] - a[1];
+      dt.f64[e] = es.txy[e] - a[2];
+    }
+    for (auto* a : {&ex, &ey, &et, &dx, &dy, &dt}) cd.push_back(std::move(*a));
+  }
+  return out;
+}
+
+std::vector<double> hole_csv_rows(const Mesh& mesh, const ElementStresses& s,
+                                  const KirschParams& p) {
+  std::vector<double> rows;
+  for (int e : elements_adjacent_to_group(mesh, "hole")) {
+    const double x = s.cx[e], y = s.cy[e], r = std::hypot(x, y), th = std::atan2(y, x);
+    rows.insert(rows.end(), {x, y, r, th,
+                             cartesian_to_polar({s.sxx[e], s.syy[e], s.txy[e]}, th).tt,
+                             kirsch_polar(p, r, th).tt});
+  }
+  return rows;
+}
+
+std::vector<double> section_x0_csv_rows(const Mesh& mesh, const ElementStresses& s,
+                                        const KirschParams& p) {
+  std::vector<double> rows;
+  for (int e : elements_adjacent_to_group(mesh, "left_sym"))
+    rows.insert(rows.end(),
+                {s.cx[e], s.cy[e], s.sxx[e], kirsch_stress(p, s.cx[e], s.cy[e])[0]});
+  return rows;
+}
+
+namespace {
+
+void write_csv(const std::string& path, const char* header, std::vector<double> rows, int cols,
+               int sort_col) {
+  const std::size_t n = rows.size() / cols;
+  std::vector<std::size_t> order(n);
+  for (std::size_t i = 0; i < n; ++i) order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+    return rows[a * cols + sort_col] < rows[b * cols + sort_col];
+  });
   File out(path);
-  std::fprintf(out.f, "x,y,r,theta,sigma_tt_num,sigma_tt_exact\n");
-  for (int e : elems) {
-    const double x = s.cx[e], y = s.cy[e], r = std::hypot(x, y), th = theta(e);
-    const double num = cartesian_to_polar({s.sxx[e], s.syy[e], s.txy[e]}, th).tt;
-    const double exact = kirsch_polar(p, r, th).tt;
-    std::fprintf(out.f, "%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n", x, y, r, th, num, exact);
+  std::fprintf(out.f, "%s\n", header);
+  for (std::size_t i : order) {
+    for (int c = 0; c < cols; ++c)
+      std::fprintf(out.f, c + 1 < cols ? "%.17g," : "%.17g\n", rows[i * cols + c]);
   }
 }
 
-void write_section_x0_csv(const std::string& path, const Mesh& mesh, const ElementStresses& s,
-                          const KirschParams& p) {
-  auto elems = elements_adjacent_to_group(mesh, "left_sym");
-  std::sort(elems.begin(), elems.end(), [&](int a, int b) { return s.cy[a] < s.cy[b]; });
-  File out(path);
-  std::fprintf(out.f, "x,y,sigma_xx_num,sigma_xx_exact\n");
-  for (int e : elems)
-    std::fprintf(out.f, "%.17g,%.17g,%.17g,%.17g\n", s.cx[e], s.cy[e], s.sxx[e],
-                 kirsch_stress(p, s.cx[e], s.cy[e])[0]);
+}  // namespace
+
+void write_hole_csv(const std::string& path, std::vector<double> rows) {
+  write_csv(path, "x,y,r,theta,sigma_tt_num,sigma_tt_exact", std::move(rows), kHoleCsvCols, 3);
+}
+
+void write_section_x0_csv(const std::string& path, std::vector<double> rows) {
+  write_csv(path, "x,y,sigma_xx_num,sigma_xx_exact", std::move(rows), kSectionCsvCols, 1);
 }
 
 }  // namespace cstfem

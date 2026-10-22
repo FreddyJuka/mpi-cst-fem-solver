@@ -14,8 +14,14 @@
 namespace cstfem {
 
 // Validated solver settings of a case file.
+//   path:        auto (serial for 1 rank, distributed otherwise) | serial | distributed;
+//                `distributed` on 1 rank runs the full distributed code path (the baseline
+//                for speedup studies).
+//   partitioner: metis | parmetis (parmetis needs -DUSE_PARMETIS=ON).
 struct CaseSettings {
   std::string mesh_path, output_dir, plane_name;
+  std::string path = "auto";
+  std::string partitioner = "metis";
   PlaneCondition plane = PlaneCondition::Stress;
   double E = 0, nu = 0, thickness = 0;
   SolverOptions solver;
@@ -31,6 +37,10 @@ const std::vector<std::string>& known_case_keys();
 //   group:tx=..,ty=.. ; ... -> constant tractions; returns nullopt.
 std::optional<KirschParams> add_case_tractions(const CaseFile& c, const Mesh& mesh,
                                                double thickness, std::vector<double>& f);
+
+// Path actually used for `nranks` ranks: "serial" or "distributed". Throws if path = serial
+// with more than one rank.
+std::string resolve_path(const CaseSettings& s, int nranks);
 
 // Serial end-to-end run: case -> mesh -> assembly -> BCs -> solve -> stresses ->
 // VTU/CSV/timings.json in output_dir. Returns 0 on success, 2 if the solver did not

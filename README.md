@@ -2,7 +2,7 @@
 
 A parallel 2D linear-elastic finite element solver in C++ using MPI domain decomposition and Constant Strain Triangle (CST) elements. A Python toolchain (Gmsh API) generates meshes and drives benchmarks of parallel speedup and scalability.
 
-Status: Milestone 1 (scaffold). See [docs/SPEC.md](docs/SPEC.md).
+Status: Milestone 4c (serial and distributed solver with parallel output). See [docs/SPEC.md](docs/SPEC.md).
 
 ## Build
 
@@ -27,24 +27,32 @@ A custom METIS location can be given with `-DMETIS_ROOT=/path`.
 From the repository root, after generating the meshes (see "Mesh generation"):
 
 ```
-mpiexec -n 1 ./build/cstfem_solve cases/kirsch_L2.case
+mpiexec -n 1 ./build/cstfem_solve cases/kirsch_L2.case     # serial path
+mpiexec -n 4 ./build/cstfem_solve cases/kirsch_L2.case     # distributed path, 4 ranks
 ```
 
-Outputs go to the case's `output_dir` (e.g. `results/kirsch_L2/`): `solution.pvtu` + `solution_0.vtu` (open the `.pvtu` in ParaView), `timings.json`, and for the Kirsch case `hole_sigma_tt.csv` and `section_x0_sigma_xx.csv`. `python/check_vtu.py <output_dir>` decodes and checks the VTU output independently.
+Case keys that select how the problem is run:
 
-With more than one rank the solve is distributed (METIS partition, row-owner matrix, halo exchange, parallel Jacobi-PCG):
+| Key | Values | Meaning |
+|---|---|---|
+| `path` | `auto` (default), `serial`, `distributed` | `auto`: serial code for 1 rank, distributed otherwise. `distributed` on 1 rank runs the full distributed code path (the fair baseline for speedup studies). `serial` with more than 1 rank is an error. |
+| `partitioner` | `metis` (default), `parmetis` | METIS on rank 0, or ParMETIS on all ranks (needs `-DUSE_PARMETIS=ON`). |
 
-```
-mpiexec -n 4 ./build/cstfem_solve cases/kirsch_L3.case
-```
+Outputs in the case's `output_dir` (e.g. `results/kirsch_L2/`), for both paths:
 
-Rank 0 prints iterations, residuals, error metrics and a per-rank load report; parallel file output (VTU/CSV/timings) is not written yet (Milestone 4c). The partitioning step can also be run alone:
+- `solution.pvtu` with one `solution_<rank>.vtu` piece per rank (open the `.pvtu` in ParaView). Points: `displacement`, `owned` (1 on the owning rank; nodes shared between pieces appear in each piece that uses them, so filter `owned = 1` to remove duplicates), `gmsh_tag`. Cells: `sigma_xx`, `sigma_yy`, `tau_xy`, `von_mises`, `sigma_zz` (plane strain), `partition_id`, `element_id`, and for the Kirsch case the analytical stresses and the errors.
+- `hole_sigma_tt.csv`, `section_x0_sigma_xx.csv` (Kirsch case; gathered on rank 0 in parallel).
+- `timings.json`: path, partitioner, ranks, DOFs, nnz, solver iterations and residuals, error metrics; for the distributed path also per-phase wall times (min/max/mean over ranks: read, partition, distribute, assembly, bcs, solve, postprocess, output, total) and the per-rank load report.
+
+`python/check_vtu.py <output_dir> [--compare <reference_dir>]` decodes all pieces independently (xml + base64 + numpy), and optionally compares displacements (by Gmsh tag), element arrays (by element id) and CSVs with another run.
+
+The partitioning step can also be run alone:
 
 ```
 mpiexec -n 4 ./build/cstfem_solve cases/kirsch_L3.case --partition-only
 ```
 
-which prints a partition report (METIS) and writes `partition.pvtu` with one piece per rank (`partition_id` per cell, `owner_rank` per node).
+which prints a partition report and writes `partition.pvtu` with one piece per rank (`partition_id` per cell, `owner_rank` per node).
 
 ## Tests
 
@@ -73,14 +81,16 @@ python/.venv/bin/python python/check_mesh.py meshes/kirsch_L2.msh
 
 ## Third-party dependencies
 
-| Dependency | Use | License |
-|---|---|---|
-| MPI (e.g. OpenMPI, MPICH) | required | TBD — to be verified |
-| METIS | required | TBD — to be verified |
-| ParMETIS | optional (`-DUSE_PARMETIS=ON`) | TBD — to be verified |
-| PETSc | optional (`-DUSE_PETSC=ON`) | TBD — to be verified |
+No third-party source code is vendored; dependencies are found on the system. The licenses below were read from the Debian/Ubuntu copyright files of the packages installed on the development machine (Ubuntu 24.04: `/usr/share/doc/<package>/copyright`); check them again for other versions.
 
-No third-party source code is vendored; dependencies are found on the system.
+| Dependency | Use | License (from the package copyright file) |
+|---|---|---|
+| OpenMPI 4.1.6 (`libopenmpi-dev`) | required (any MPI) | BSD-style 3-clause license text (redistribution with notice; no endorsement). Bundled components carry their own terms, e.g. ROMIO (University of Chicago permissive notice), ptmalloc2 (LGPL-2.1+), libltdl (LGPL-2+ with exception). |
+| METIS 5.1.0 (`libmetis-dev`) | required | Apache-2.0. Some bundled GKlib files: BSD-3-clause (`ms_inttypes.h`, `ms_stdint.h`), LGPL-2.1+ (`getopt.c`, `gk_mksort.h`), BSD-like (`random.c`). |
+| ParMETIS 4.0.3 (`libparmetis-dev`, Ubuntu multiverse) | optional (`-DUSE_PARMETIS=ON`) | Non-free: "can be freely used for educational and research purposes by non-profit institutions and US government agencies only. Other organizations are allowed to use ParMETIS/METIS only for evaluation purposes, and any further uses will require prior approval. The software may not be sold or redistributed without prior approval." |
+| PETSc | optional (`-DUSE_PETSC=ON`, Milestone 7) | not verified yet (not installed) |
+
+**ParMETIS notice.** ParMETIS is strictly optional and off by default. This project never redistributes it: no vendored source, no release binaries, no container images that include it, and it is not used in CI. By installing ParMETIS and building with `-DUSE_PARMETIS=ON` you accept its license terms yourself; read `/usr/share/doc/libparmetis-dev/copyright` (or the license of the version you install) before doing so.
 
 ## License
 

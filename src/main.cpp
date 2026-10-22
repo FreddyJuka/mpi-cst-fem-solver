@@ -5,7 +5,6 @@
 #include <string>
 
 #include "cstfem/config.hpp"
-#include "cstfem/driver.hpp"
 #include "cstfem/parallel_driver.hpp"
 #include "cstfem/version.hpp"
 
@@ -44,10 +43,8 @@ int main(int argc, char** argv) {
     status = 1;
   } else if (partition_only) {
     status = cstfem::run_partition_only(case_path, MPI_COMM_WORLD, std::cout, std::cerr);
-  } else if (size > 1) {
-    status = cstfem::run_parallel_case(case_path, MPI_COMM_WORLD, std::cout, std::cerr);
   } else {
-    status = cstfem::run_serial_case(case_path, std::cout, std::cerr);
+    status = cstfem::run_case(case_path, MPI_COMM_WORLD, std::cout, std::cerr);
   }
 
   MPI_Finalize();

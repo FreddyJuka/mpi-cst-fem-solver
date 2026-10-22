@@ -14,12 +14,13 @@ namespace cstfem {
 int run_partition_only(const std::string& case_path, MPI_Comm comm, std::ostream& out,
                        std::ostream& err);
 
-// Distributed solve of a case file (np > 1): rank 0 reads the case (text broadcast) and the
-// mesh; partition, distributed assembly, loads, Dirichlet, distributed Jacobi-PCG, element
-// stresses and Kirsch metrics. Rank 0 prints iterations, residuals, error metrics and a load
-// report. File output (VTU/CSV/timings) is not written yet. Collective; returns 0 on
-// success, 2 if the solver did not converge, 1 on error.
-int run_parallel_case(const std::string& case_path, MPI_Comm comm, std::ostream& out,
-                      std::ostream& err);
+// `cstfem_solve <case>`: selects the code path from the case key `path` (auto: serial for 1
+// rank, distributed otherwise) and runs it. The distributed path: rank 0 reads the case (text
+// broadcast) and the mesh; partition (METIS or ParMETIS), distribution, distributed assembly,
+// loads, Dirichlet, Jacobi-PCG, element stresses, Kirsch metrics; every rank writes its VTU
+// piece, rank 0 the .pvtu, the gathered CSVs and timings.json (per-phase min/max/mean over
+// ranks, load report). Collective; returns 0 on success, 2 if the solver did not converge,
+// 1 on error.
+int run_case(const std::string& case_path, MPI_Comm comm, std::ostream& out, std::ostream& err);
 
 }  // namespace cstfem

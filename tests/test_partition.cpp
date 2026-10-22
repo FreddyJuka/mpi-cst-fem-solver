@@ -19,6 +19,7 @@ using namespace cstfem;
 namespace {
 
 int g_rank = 0, g_size = 1, g_failures = 0;
+Partitioner g_partitioner = Partitioner::Metis;  // --partitioner=parmetis
 
 #define CHECK(cond)                                                                            \
   do {                                                                                         \
@@ -212,7 +213,7 @@ void check_ghost_consistency(const DistributedMesh& dm) {
 }
 
 void check_reproducible(const std::string& path, const DistributedMesh& first) {
-  const DistributedMesh again = read_partition_distribute(path, MPI_COMM_WORLD);
+  const DistributedMesh again = read_partition_distribute(path, MPI_COMM_WORLD, nullptr, g_partitioner);
   CHECK(again.offsets == first.offsets);
   CHECK(again.local_to_global == first.local_to_global);
   CHECK(again.element_ids == first.element_ids);
@@ -226,13 +227,15 @@ int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
   MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &g_size);
+  for (int i = 1; i < argc; ++i)
+    if (std::string(argv[i]) == "--partitioner=parmetis") g_partitioner = Partitioner::ParMetis;
 
   for (const char* name : {"kirsch_L0.msh", "kirsch_L1.msh"}) {
     const std::string path = std::string(CSTFEM_TEST_DATA_DIR) + "/" + name;
     Mesh full;
     if (g_rank == 0) full = read_gmsh(path);
     PartitionSummary summary;
-    const DistributedMesh dm = read_partition_distribute(path, MPI_COMM_WORLD, &summary);
+    const DistributedMesh dm = read_partition_distribute(path, MPI_COMM_WORLD, &summary, g_partitioner);
     const int before = g_failures;
     check_ownership_and_numbering(dm, g_rank == 0 ? &full : nullptr);
     check_elements_and_edges(dm, g_rank == 0 ? &full : nullptr);
@@ -243,8 +246,8 @@ int main(int argc, char** argv) {
     int ghosts = dm.num_element_ghosts(), total_ghosts = 0;
     MPI_Reduce(&ghosts, &total_ghosts, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
     if (g_rank == 0)
-      std::printf("[%s] %s on %d rank(s): edge cut %lld, interface nodes %d, element ghosts %d\n",
-                  fails == 0 ? "PASS" : "FAIL", name, g_size, summary.edge_cut,
+      std::printf("[%s] %s on %d rank(s), %s: edge cut %lld, interface nodes %d, element ghosts %d\n",
+                  fails == 0 ? "PASS" : "FAIL", name, g_size, summary.partitioner.c_str(), summary.edge_cut,
                   summary.interface_nodes, total_ghosts);
   }
 

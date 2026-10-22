@@ -2,6 +2,11 @@
 
 #include <metis.h>
 
+#include "cstfem/config.hpp"  // USE_PARMETIS
+#if USE_PARMETIS
+#include <parmetis.h>
+#endif
+
 #include <algorithm>
 #include <climits>
 #include <cstdint>
@@ -177,18 +182,29 @@ int DistributedMesh::to_local(int global_id) const {
   return it == global_to_local.end() ? -1 : it->second;
 }
 
-GlobalPartition partition_mesh(const Mesh& mesh, int nparts, int seed) {
+namespace {
+
+void check_idx_range(const Mesh& mesh) {
   const std::size_t ne = mesh.num_triangles(), nn = mesh.num_nodes();
   const auto idx_max = static_cast<std::size_t>(std::numeric_limits<idx_t>::max());
-  if (nparts < 1) throw std::runtime_error("partition_mesh: nparts must be >= 1");
   if (nn > idx_max || ne > idx_max / 3)
-    throw std::runtime_error("partition_mesh: mesh with " + std::to_string(nn) + " nodes and " +
+    throw std::runtime_error("partition: mesh with " + std::to_string(nn) + " nodes and " +
                              std::to_string(ne) + " triangles does not fit METIS idx_t (" +
                              std::to_string(8 * sizeof(idx_t)) + "-bit)");
+}
 
-  GlobalPartition p;
-  p.nparts = nparts;
-  p.elem_part.assign(ne, 0);
+}  // namespace
+
+std::string partitioner_name(Partitioner p) {
+  return p == Partitioner::ParMetis ? "parmetis" : "metis";
+}
+
+GlobalPartition partition_mesh(const Mesh& mesh, int nparts, int seed) {
+  const std::size_t ne = mesh.num_triangles(), nn = mesh.num_nodes();
+  if (nparts < 1) throw std::runtime_error("partition_mesh: nparts must be >= 1");
+  check_idx_range(mesh);
+  std::vector<int> elem_part(ne, 0);
+  long long edge_cut = 0;
   if (nparts > 1) {
     if (static_cast<std::size_t>(nparts) > ne)
       throw std::runtime_error("partition_mesh: more parts (" + std::to_string(nparts) +
@@ -208,9 +224,20 @@ GlobalPartition partition_mesh(const Mesh& mesh, int nparts, int seed) {
     if (rc != METIS_OK)
       throw std::runtime_error("METIS_PartMeshDual failed (return code " + std::to_string(rc) +
                                ")");
-    for (std::size_t e = 0; e < ne; ++e) p.elem_part[e] = static_cast<int>(epart[e]);
-    p.edge_cut = objval;
+    for (std::size_t e = 0; e < ne; ++e) elem_part[e] = static_cast<int>(epart[e]);
+    edge_cut = objval;
   }
+  return build_partition(mesh, std::move(elem_part), nparts, edge_cut);
+}
+
+GlobalPartition build_partition(const Mesh& mesh, std::vector<int> elem_part, int nparts,
+                                long long edge_cut) {
+  const std::size_t ne = mesh.num_triangles(), nn = mesh.num_nodes();
+  if (elem_part.size() != ne) throw std::logic_error("build_partition: wrong partition size");
+  GlobalPartition p;
+  p.nparts = nparts;
+  p.elem_part = std::move(elem_part);
+  p.edge_cut = edge_cut;
 
   // Ownership: lowest rank among the parts touching the node.
   p.node_owner.assign(nn, INT_MAX);
@@ -316,27 +343,145 @@ DistributedMesh distribute_mesh(const Mesh* mesh, const GlobalPartition* part, M
   return unpack(ints, reals, rank, nranks);
 }
 
-DistributedMesh read_partition_distribute(const std::string& mesh_path, MPI_Comm comm,
-                                          PartitionSummary* summary, int seed) {
+std::vector<int> parmetis_element_partition(const Mesh* mesh, MPI_Comm comm, int seed,
+                                            long long* edge_cut) {
   int rank = 0, nranks = 1;
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &nranks);
-  Mesh mesh;
-  GlobalPartition part;
+#if USE_PARMETIS
+  // Block distribution of the elements: rank r gets [elmdist[r], elmdist[r + 1]).
+  long long ne = 0;
   bool ok = true;
   std::string error;
   if (rank == 0) {
     try {
-      mesh = read_gmsh(mesh_path);
-      part = partition_mesh(mesh, nranks, seed);
-      if (summary) *summary = {mesh_path, part.edge_cut, part.interface_nodes};
+      check_idx_range(*mesh);
+      ne = static_cast<long long>(mesh->num_triangles());
+      if (ne < nranks)
+        throw std::runtime_error("parmetis: fewer triangles (" + std::to_string(ne) +
+                                 ") than ranks (" + std::to_string(nranks) + ")");
     } catch (const std::exception& e) {
       ok = false;
       error = e.what();
     }
   }
   check_collective(ok, error, comm);
-  return distribute_mesh(rank == 0 ? &mesh : nullptr, rank == 0 ? &part : nullptr, comm, 0);
+  MPI_Bcast(&ne, 1, MPI_LONG_LONG, 0, comm);
+  std::vector<idx_t> elmdist(nranks + 1);
+  for (int r = 0; r <= nranks; ++r) elmdist[r] = static_cast<idx_t>(ne * r / nranks);
+  if (nranks == 1) {
+    if (edge_cut) *edge_cut = 0;
+    return std::vector<int>(static_cast<std::size_t>(ne), 0);
+  }
+
+  // Scatter the connectivity blocks (original node indices).
+  std::vector<int> counts(nranks), displs(nranks);
+  for (int r = 0; r < nranks; ++r) {
+    counts[r] = static_cast<int>(3 * (elmdist[r + 1] - elmdist[r]));
+    displs[r] = static_cast<int>(3 * elmdist[r]);
+  }
+  const int nlocal = static_cast<int>(elmdist[rank + 1] - elmdist[rank]);
+  std::vector<idx_t> all_eind, eind(3 * static_cast<std::size_t>(nlocal)), eptr(nlocal + 1);
+  if (rank == 0) all_eind.assign(mesh->triangles.begin(), mesh->triangles.end());
+  MPI_Scatterv(all_eind.data(), counts.data(), displs.data(), IDX_T, eind.data(), 3 * nlocal,
+               IDX_T, 0, comm);
+  for (int e = 0; e <= nlocal; ++e) eptr[e] = 3 * e;
+
+  idx_t wgtflag = 0, numflag = 0, ncon = 1, ncommon = 2, nparts = nranks, cut = 0;
+  std::vector<real_t> tpwgts(nranks, static_cast<real_t>(1.0 / nranks));
+  real_t ubvec[1] = {static_cast<real_t>(1.05)};
+  idx_t options[3] = {1, 0, seed};  // use options, no debug output, seed
+  std::vector<idx_t> part(nlocal);
+  MPI_Comm c = comm;
+  const int rc = ParMETIS_V3_PartMeshKway(elmdist.data(), eptr.data(), eind.data(), nullptr,
+                                          &wgtflag, &numflag, &ncon, &ncommon, &nparts,
+                                          tpwgts.data(), ubvec, options, &cut, part.data(), &c);
+  check_collective(rc == METIS_OK,
+                   "ParMETIS_V3_PartMeshKway failed (return code " + std::to_string(rc) + ")",
+                   comm);
+  if (edge_cut) *edge_cut = cut;
+
+  // Migrate the partition vector back to rank 0 (ownership/numbering run there in v1).
+  for (int r = 0; r < nranks; ++r) {
+    counts[r] /= 3;
+    displs[r] /= 3;
+  }
+  std::vector<int> mine(part.begin(), part.end()), all(rank == 0 ? ne : 0);
+  MPI_Gatherv(mine.data(), nlocal, MPI_INT, all.data(), counts.data(), displs.data(), MPI_INT, 0,
+              comm);
+  return all;
+#else
+  (void)mesh;
+  (void)seed;
+  (void)edge_cut;
+  (void)rank;
+  (void)nranks;
+  check_collective(false,
+                   "partitioner = parmetis, but ParMETIS was not compiled in (configure with "
+                   "-DUSE_PARMETIS=ON)",
+                   comm);
+  return {};
+#endif
+}
+
+DistributedMesh read_partition_distribute(const std::string& mesh_path, MPI_Comm comm,
+                                          PartitionSummary* summary, Partitioner partitioner,
+                                          int seed, PartitionTimings* timings) {
+  int rank = 0, nranks = 1;
+  MPI_Comm_rank(comm, &rank);
+  MPI_Comm_size(comm, &nranks);
+  // Each phase starts after a barrier; the time is this rank's time inside the phase.
+  double t0 = 0.0;
+  auto start = [&] {
+    MPI_Barrier(comm);
+    t0 = MPI_Wtime();
+  };
+  auto stop = [&](double PartitionTimings::*field) {
+    if (timings) timings->*field = MPI_Wtime() - t0;
+  };
+
+  Mesh mesh;
+  GlobalPartition part;
+  bool ok = true;
+  std::string error;
+
+  start();
+  if (rank == 0) {
+    try {
+      mesh = read_gmsh(mesh_path);
+    } catch (const std::exception& e) {
+      ok = false;
+      error = e.what();
+    }
+  }
+  stop(&PartitionTimings::read);
+  check_collective(ok, error, comm);
+
+  start();
+  std::vector<int> elem_part;
+  long long cut = 0;
+  if (partitioner == Partitioner::ParMetis)
+    elem_part = parmetis_element_partition(rank == 0 ? &mesh : nullptr, comm, seed, &cut);
+  if (rank == 0) {
+    try {
+      part = partitioner == Partitioner::ParMetis
+                 ? build_partition(mesh, std::move(elem_part), nranks, cut)
+                 : partition_mesh(mesh, nranks, seed);
+      if (summary)
+        *summary = {mesh_path, part.edge_cut, part.interface_nodes, partitioner_name(partitioner)};
+    } catch (const std::exception& e) {
+      ok = false;
+      error = e.what();
+    }
+  }
+  stop(&PartitionTimings::partition);
+  check_collective(ok, error, comm);
+
+  start();
+  DistributedMesh dm =
+      distribute_mesh(rank == 0 ? &mesh : nullptr, rank == 0 ? &part : nullptr, comm, 0);
+  stop(&PartitionTimings::distribute);
+  return dm;
 }
 
 void print_partition_report(const DistributedMesh& dm, const PartitionSummary& summary,
@@ -351,8 +496,9 @@ void print_partition_report(const DistributedMesh& dm, const PartitionSummary& s
   MPI_Gather(mine.data(), width, MPI_LONG_LONG, all.data(), width, MPI_LONG_LONG, 0, comm);
   if (dm.rank != 0) return;
 
-  out << "Partition report: " << summary.mesh_path << ", " << dm.nranks
-      << " rank(s), METIS_PartMeshDual (ncommon = 2, seed = " << kMetisSeed << ")"
+  out << "Partition report: " << summary.mesh_path << ", " << dm.nranks << " rank(s), "
+      << (summary.partitioner == "parmetis" ? "ParMETIS_V3_PartMeshKway" : "METIS_PartMeshDual")
+      << " (ncommon = 2, seed = " << kMetisSeed << ")"
       << (dm.nranks == 1 ? " skipped for 1 rank" : "") << "\n";
   out << std::setw(5) << "rank" << std::setw(11) << "triangles" << std::setw(8) << "owned"
       << std::setw(13) << "elem-ghosts";
@@ -383,10 +529,7 @@ void write_partition_vtu(const DistributedMesh& dm, const std::string& dir,
   if (dm.rank == 0) {
     try {
       std::filesystem::create_directories(dir);
-      // Remove pieces left over from an earlier run with more ranks.
-      for (int r = dm.nranks;; ++r) {
-        if (!std::filesystem::remove(dir + "/" + base + "_" + std::to_string(r) + ".vtu")) break;
-      }
+      remove_stale_pieces(dir, base, dm.nranks);
     } catch (const std::exception& e) {
       ok = false;
       error = e.what();
@@ -394,9 +537,10 @@ void write_partition_vtu(const DistributedMesh& dm, const std::string& dir,
   }
   check_collective(ok, error, comm);
 
-  const std::vector<VtuArray> point_data = {{"owner_rank", 1, {}, {dm.node_owner.begin(), dm.node_owner.end()}}};
+  const std::vector<VtuArray> point_data = {
+      {"owner_rank", 1, {}, {dm.node_owner.begin(), dm.node_owner.end()}, {}}};
   const std::vector<VtuArray> cell_data = {
-      {"partition_id", 1, {}, std::vector<std::int32_t>(dm.local.num_triangles(), dm.rank)}};
+      {"partition_id", 1, {}, std::vector<std::int32_t>(dm.local.num_triangles(), dm.rank), {}}};
   try {
     write_vtu_piece(dir + "/" + base + "_" + std::to_string(dm.rank) + ".vtu", dm.local.xy,
                     dm.local.triangles, point_data, cell_data);
