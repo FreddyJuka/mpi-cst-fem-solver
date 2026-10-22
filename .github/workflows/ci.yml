@@ -11,7 +11,6 @@ jobs:
     env:
       # CMake is not installed from apt: the runner image provides it (checked below).
       APT_PACKAGES: build-essential libopenmpi-dev openmpi-bin libmetis-dev python3-numpy
-      APT_DEBS: ${{ runner.temp }}/apt-debs
     steps:
       - uses: actions/checkout@v7
 
@@ -31,7 +30,7 @@ jobs:
         id: cache
         uses: actions/cache/restore@v6
         with:
-          path: ${{ env.APT_DEBS }}
+          path: ${{ runner.temp }}/apt-debs
           key: apt-${{ runner.os }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.pkgs }}
           restore-keys: |
             apt-${{ runner.os }}-${{ steps.key.outputs.image }}-
@@ -41,6 +40,7 @@ jobs:
         timeout-minutes: 5
         run: |
           shopt -s nullglob
+          APT_DEBS="$RUNNER_TEMP/apt-debs"   # same directory as the cache steps' path
           mkdir -p "$APT_DEBS"
           cached=("$APT_DEBS"/*.deb)
           echo "cache hit: '${{ steps.cache.outputs.cache-hit }}', .deb files restored: ${#cached[@]}"
@@ -60,7 +60,7 @@ jobs:
         if: always() && steps.install.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && steps.install.outputs.debs != '0'
         uses: actions/cache/save@v6
         with:
-          path: ${{ env.APT_DEBS }}
+          path: ${{ runner.temp }}/apt-debs
           key: apt-${{ runner.os }}-${{ steps.key.outputs.image }}-${{ steps.key.outputs.pkgs }}
 
       - name: Check CMake version
