@@ -4,6 +4,16 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(test_mpi_smoke PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Serial unit tests.
+foreach(t test_case test_element test_mesh_reader)
+  add_executable(${t} ${t}.cpp)
+  target_link_libraries(${t} PRIVATE cstfem)
+  target_compile_definitions(${t} PRIVATE
+    CSTFEM_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+    CSTFEM_TEST_TMP_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  add_test(NAME ${t} COMMAND ${t})
+endforeach()
+
 set(_mpi_extra ${MPIEXEC_PREFLAGS})
 if(CSTFEM_MPI_OVERSUBSCRIBE)
   list(APPEND _mpi_extra --oversubscribe)

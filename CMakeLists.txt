@@ -31,19 +31,22 @@ endif()
 set(CSTFEM_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(cmake/config.hpp.in "${CSTFEM_GENERATED_DIR}/cstfem/config.hpp" @ONLY)
 
-add_library(cstfem src/version.cpp)
+add_library(cstfem
+  src/case.cpp
+  src/element.cpp
+  src/mesh_io.cpp
+  src/version.cpp)
 target_include_directories(cstfem PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CSTFEM_GENERATED_DIR}")
 target_link_libraries(cstfem PUBLIC MPI::MPI_CXX METIS::METIS)
 target_compile_features(cstfem PUBLIC cxx_std_17)
+# Optional backends are exposed only through the generated config.hpp (USE_* macros).
 if(USE_PARMETIS)
   target_link_libraries(cstfem PUBLIC ParMETIS::ParMETIS)
-  target_compile_definitions(cstfem PUBLIC CSTFEM_HAVE_PARMETIS)
 endif()
 if(USE_PETSC)
   target_link_libraries(cstfem PUBLIC PkgConfig::PETSC)
-  target_compile_definitions(cstfem PUBLIC CSTFEM_HAVE_PETSC)
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(cstfem PUBLIC -Wall -Wextra -Wpedantic)
