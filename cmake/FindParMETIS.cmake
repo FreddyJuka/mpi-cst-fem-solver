@@ -1,0 +1,25 @@
+# FindParMETIS.cmake
+# Finds ParMETIS (and the METIS it requires). Hint: PARMETIS_ROOT / ParMETIS_ROOT.
+# Result: imported target ParMETIS::ParMETIS.
+
+find_package(METIS REQUIRED)
+
+find_path(PARMETIS_INCLUDE_DIR parmetis.h
+  HINTS "${PARMETIS_ROOT}" "$ENV{PARMETIS_ROOT}" "${ParMETIS_ROOT}"
+  PATH_SUFFIXES include)
+find_library(PARMETIS_LIBRARY parmetis
+  HINTS "${PARMETIS_ROOT}" "$ENV{PARMETIS_ROOT}" "${ParMETIS_ROOT}"
+  PATH_SUFFIXES lib lib64)
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(ParMETIS
+  REQUIRED_VARS PARMETIS_LIBRARY PARMETIS_INCLUDE_DIR)
+
+if(ParMETIS_FOUND AND NOT TARGET ParMETIS::ParMETIS)
+  add_library(ParMETIS::ParMETIS UNKNOWN IMPORTED)
+  set_target_properties(ParMETIS::ParMETIS PROPERTIES
+    IMPORTED_LOCATION "${PARMETIS_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${PARMETIS_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES "METIS::METIS;MPI::MPI_CXX")
+endif()
+mark_as_advanced(PARMETIS_INCLUDE_DIR PARMETIS_LIBRARY)

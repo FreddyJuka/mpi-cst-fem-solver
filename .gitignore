@@ -1,0 +1,29 @@
+# Build
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+
+# Results and generated data
+results/
+*.msh
+!tests/data/*.msh
+*.vtu
+*.pvtu
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+*:Zone.Identifier
