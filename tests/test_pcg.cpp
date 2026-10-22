@@ -127,6 +127,59 @@ void test_not_converged() {
   CHECK(!solver.stats().converged);
 }
 
+// Matrix-free operator that applies A for the first `switch_after` calls and 1.01 A after.
+// CG converges on A, but the final true-residual check sees the changed operator, so the
+// recursive and true residuals disagree and a warning must be reported.
+class SwitchingOperator : public LinearOperator {
+public:
+  SwitchingOperator(const CsrMatrix& A, int switch_after) : A_(A), switch_after_(switch_after) {}
+  void apply(const std::vector<double>& x, std::vector<double>& y) const override {
+    A_.multiply(x, y);
+    if (++calls_ > switch_after_)
+      for (double& v : y) v *= 1.01;
+  }
+  int calls() const { return calls_; }
+
+private:
+  const CsrMatrix& A_;
+  int switch_after_;
+  mutable int calls_ = 0;
+};
+
+void test_true_residual_reporting() {
+  std::mt19937 gen(11);
+  const int n = 40;
+  const CsrMatrix K = dense_to_csr(random_spd(n, gen), n);
+  std::vector<double> b(n, 1.0), inv_diag(n), x;
+  for (int i = 0; i < n; ++i) inv_diag[i] = 1.0 / K.diagonal(i);
+  const SolverOptions opt{1e-10, 1000, false};
+
+  // Consistent operator: true and recursive residuals agree, no warning.
+  SwitchingOperator good(K, 1 << 30);
+  const SolverStats st = pcg_jacobi(good, inv_diag, SerialReduction(), b, x, opt);
+  std::printf("  consistent: %d iterations, recursive %.2e, true %.2e\n", st.iterations,
+              st.rel_residual, st.true_rel_residual);
+  CHECK(st.converged);
+  CHECK(st.true_rel_residual < 10 * opt.rtol);
+  CHECK(st.warning.empty());
+  CHECK(good.calls() == st.iterations + 1);  // one apply per iteration + the true residual
+
+  // Operator changes exactly for the final true-residual evaluation.
+  SwitchingOperator bad(K, st.iterations);
+  const SolverStats sb = pcg_jacobi(bad, inv_diag, SerialReduction(), b, x, opt);
+  std::printf("  inconsistent: recursive %.2e, true %.2e\n  -> %s\n", sb.rel_residual,
+              sb.true_rel_residual, sb.warning.c_str());
+  CHECK(sb.converged);
+  CHECK(sb.true_rel_residual > 10 * opt.rtol);
+  CHECK(sb.warning.find("WARNING") != std::string::npos);
+  CHECK(sb.warning.find("true residual") != std::string::npos);
+
+  // Not converged: no warning (the message already says NOT converged), true residual set.
+  const SolverStats sn =
+      pcg_jacobi(good, inv_diag, SerialReduction(), b, x, SolverOptions{1e-14, 2, false});
+  CHECK(!sn.converged && sn.warning.empty() && sn.true_rel_residual > 0.0);
+}
+
 void test_bad_diagonal() {
   CsrMatrix K = dense_to_csr({2.0, 1.0, 1.0, -1.0}, 2);
   CgJacobiSolver solver;
@@ -139,6 +192,7 @@ int main() {
   RUN_TEST(test_random_spd);
   RUN_TEST(test_zero_rhs);
   RUN_TEST(test_not_converged);
+  RUN_TEST(test_true_residual_reporting);
   RUN_TEST(test_bad_diagonal);
   return test_summary();
 }

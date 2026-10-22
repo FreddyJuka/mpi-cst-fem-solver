@@ -45,14 +45,18 @@ struct SolverOptions {
 
 struct SolverStats {
   int iterations = 0;
-  double rel_residual = 0.0;  // ||r|| / ||b|| at exit
-  bool converged = false;
-  std::string message;                    // reason for stopping, readable
+  double rel_residual = 0.0;       // recursive (updated) ||r_k|| / ||b|| at exit
+  double true_rel_residual = 0.0;  // ||b - A x|| / ||b||, recomputed at exit
+  bool converged = false;          // recursive residual reached rtol
+  std::string message;             // reason for stopping, readable
+  std::string warning;             // non-empty if converged but true residual > 10 rtol
   std::vector<double> residual_history;   // ||r_k|| / ||b||, k = 0.. (if recorded)
 };
 
 // Jacobi-preconditioned CG from x = 0. Stops when ||r_k|| / ||b|| < rtol; returns x = 0
 // immediately if ||b|| = 0. Non-convergence (max_iter, breakdown) gives converged = false.
+// On exit the true residual b - A x is recomputed; if it exceeds 10 rtol although the
+// recursive residual converged, `warning` is set (the caller prints it; the library does not).
 SolverStats pcg_jacobi(const LinearOperator& A, const std::vector<double>& inv_diag,
                        const Reduction& reduction, const std::vector<double>& b,
                        std::vector<double>& x, const SolverOptions& options);

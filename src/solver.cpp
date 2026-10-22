@@ -18,9 +18,11 @@ double SerialReduction::dot(const std::vector<double>& a, const std::vector<doub
   return s;
 }
 
-SolverStats pcg_jacobi(const LinearOperator& A, const std::vector<double>& inv_diag,
-                       const Reduction& reduction, const std::vector<double>& b,
-                       std::vector<double>& x, const SolverOptions& options) {
+namespace {
+
+SolverStats pcg_iterate(const LinearOperator& A, const std::vector<double>& inv_diag,
+                        const Reduction& reduction, const std::vector<double>& b,
+                        std::vector<double>& x, const SolverOptions& options) {
   const std::size_t n = b.size();
   SolverStats st;
   x.assign(n, 0.0);
@@ -76,6 +78,29 @@ SolverStats pcg_jacobi(const LinearOperator& A, const std::vector<double>& inv_d
   msg << "NOT converged: reached max_iter = " << options.max_iter << ", relative residual "
       << st.rel_residual << " (rtol " << options.rtol << ")";
   st.message = msg.str();
+  return st;
+}
+
+}  // namespace
+
+SolverStats pcg_jacobi(const LinearOperator& A, const std::vector<double>& inv_diag,
+                       const Reduction& reduction, const std::vector<double>& b,
+                       std::vector<double>& x, const SolverOptions& options) {
+  SolverStats st = pcg_iterate(A, inv_diag, reduction, b, x, options);
+  const double bnorm = reduction.norm(b);
+  if (bnorm == 0.0) return st;
+
+  std::vector<double> r;
+  A.apply(x, r);
+  for (std::size_t i = 0; i < r.size(); ++i) r[i] = b[i] - r[i];
+  st.true_rel_residual = reduction.norm(r) / bnorm;
+  if (st.converged && st.true_rel_residual > 10.0 * options.rtol) {
+    std::ostringstream msg;
+    msg << "WARNING: CG recursive residual converged (" << st.rel_residual
+        << ") but the true residual ||b - Ax|| / ||b|| = " << st.true_rel_residual
+        << " exceeds 10 * rtol = " << 10.0 * options.rtol;
+    st.warning = msg.str();
+  }
   return st;
 }
 

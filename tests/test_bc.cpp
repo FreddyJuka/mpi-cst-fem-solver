@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <set>
+#include <sstream>
 #include <string>
 
 #include "cstfem/assembly.hpp"
 #include "cstfem/bc.hpp"
+#include "cstfem/driver.hpp"
 #include "test_assert.hpp"
 
 using namespace cstfem;
@@ -122,6 +125,53 @@ void test_equilibrium() {
   }
 }
 
+CaseFile case_from(const std::string& text) {
+  std::istringstream in(text);
+  return CaseFile::parse(in, "test.case");
+}
+
+std::set<int> loaded_nodes(const std::vector<double>& f) {
+  std::set<int> nodes;
+  for (std::size_t i = 0; i < f.size(); ++i)
+    if (f[i] != 0.0) nodes.insert(static_cast<int>(i / 2));
+  return nodes;
+}
+
+std::set<int> group_nodes(const Mesh& m, const std::vector<std::string>& groups) {
+  std::set<int> nodes;
+  for (const auto& g : groups)
+    for (const auto& e : m.boundary_edges.at(g)) nodes.insert({e[0], e[1]});
+  return nodes;
+}
+
+void test_case_tractions() {
+  const Mesh m = load_l0();
+  const double t = 0.01;
+
+  // Explicit form: constant traction on `right`; total force t * tx * L.
+  std::vector<double> f(2 * m.num_nodes(), 0.0);
+  const auto none = add_case_tractions(case_from("bc.traction = right:tx=5e6,ty=0\n"), m, t, f);
+  CHECK(!none.has_value());
+  double fx = 0.0;
+  for (std::size_t n = 0; n < m.num_nodes(); ++n) fx += f[2 * n];
+  CHECK_NEAR(fx, t * 5e6 * 1.0, 1e-12 * t * 5e6);
+  CHECK(loaded_nodes(f) == group_nodes(m, {"right"}));
+
+  // kirsch_exact: loads only nodes of `right` and `top`; the hole stays traction-free.
+  std::vector<double> g(2 * m.num_nodes(), 0.0);
+  const auto p = add_case_tractions(
+      case_from("bc.traction = kirsch_exact\nkirsch.sigma_inf = 100e6\nkirsch.a = 0.1\n"), m, t,
+      g);
+  CHECK(p.has_value() && p->sigma_inf == 100e6 && p->a == 0.1);
+  const auto loaded = loaded_nodes(g), outer = group_nodes(m, {"right", "top"});
+  CHECK(std::includes(outer.begin(), outer.end(), loaded.begin(), loaded.end()));
+  for (int n : group_nodes(m, {"hole"})) CHECK(loaded.count(n) == 0);
+
+  CHECK_THROWS(add_case_tractions(case_from("bc.traction = kirsch_exact\nkirsch.a = 0.1\n"), m,
+                                  t, g),
+               "missing required key 'kirsch.sigma_inf'");
+}
+
 }  // namespace
 
 int main() {
@@ -131,5 +181,6 @@ int main() {
   RUN_TEST(test_symmetric_elimination);
   RUN_TEST(test_outward_normals);
   RUN_TEST(test_equilibrium);
+  RUN_TEST(test_case_tractions);
   return test_summary();
 }

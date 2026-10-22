@@ -38,16 +38,21 @@ endif()
 set(CSTFEM_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(cmake/config.hpp.in "${CSTFEM_GENERATED_DIR}/cstfem/config.hpp" @ONLY)
 
-# Serial core: mesh, case file, element, assembly, BCs, solver. No MPI, no METIS.
+# Serial core: mesh, case file, element, assembly, BCs, solver, output, serial driver.
+# No MPI, no METIS.
 add_library(cstfem_core
   src/assembly.cpp
   src/bc.cpp
   src/case.cpp
   src/csr.cpp
+  src/driver.cpp
   src/element.cpp
+  src/kirsch.cpp
   src/mesh_io.cpp
+  src/postprocess.cpp
   src/solver.cpp
-  src/version.cpp)
+  src/version.cpp
+  src/vtu.cpp)
 target_include_directories(cstfem_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CSTFEM_GENERATED_DIR}")

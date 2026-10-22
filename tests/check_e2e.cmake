@@ -1,0 +1,38 @@
+# End-to-end check of two Kirsch runs (cmake -P, no Python needed).
+#   -DDIRS="dir_L0;dir_L1"  output directories, coarse to fine
+#   -DLIMIT=1e-9            10 * rtol of the runs (CMake has no floating-point arithmetic,
+#                           so the caller passes the product)
+# Checks: outputs exist, converged, true residual < LIMIT, L2 stress error decreases.
+
+if(NOT DEFINED DIRS OR NOT DEFINED LIMIT)
+  message(FATAL_ERROR "usage: cmake -DDIRS=\"d0;d1\" -DLIMIT=<10*rtol> -P check_e2e.cmake")
+endif()
+set(files solution.pvtu solution_0.vtu timings.json hole_sigma_tt.csv section_x0_sigma_xx.csv)
+
+set(prev "")
+foreach(dir IN LISTS DIRS)
+  foreach(f IN LISTS files)
+    if(NOT EXISTS "${dir}/${f}")
+      message(FATAL_ERROR "missing output ${dir}/${f}")
+    endif()
+  endforeach()
+  file(READ "${dir}/timings.json" json)
+  string(JSON converged GET "${json}" solver converged)
+  string(JSON true_res GET "${json}" solver true_rel_residual)
+  string(JSON err GET "${json}" kirsch l2_rel_stress_error)
+  string(JSON dofs GET "${json}" dofs)
+  string(JSON iters GET "${json}" solver iterations)
+  message(STATUS "${dir}: dofs ${dofs}, iterations ${iters}, converged ${converged}, "
+                 "true residual ${true_res}, L2 stress error ${err}")
+  if(NOT converged)
+    message(FATAL_ERROR "${dir}: solver did not converge")
+  endif()
+  if(NOT true_res LESS LIMIT)
+    message(FATAL_ERROR "${dir}: true residual ${true_res} >= ${LIMIT}")
+  endif()
+  if(NOT prev STREQUAL "" AND NOT err LESS prev)
+    message(FATAL_ERROR "${dir}: L2 stress error ${err} did not decrease (previous ${prev})")
+  endif()
+  set(prev "${err}")
+endforeach()
+message(STATUS "e2e check passed")
