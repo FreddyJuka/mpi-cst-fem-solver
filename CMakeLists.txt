@@ -30,8 +30,46 @@ if(USE_PARMETIS)
 endif()
 
 if(USE_PETSC)
+  # PETSc via pkg-config. Besides the default search path, look in PETSC_DIR[/PETSC_ARCH]
+  # (CMake or environment variable) and in the Debian/Ubuntu prefix /usr/lib/petscdir/petsc-real.
   find_package(PkgConfig REQUIRED)
+  set(_petsc_dir "${PETSC_DIR}")
+  if(NOT _petsc_dir AND DEFINED ENV{PETSC_DIR})
+    set(_petsc_dir "$ENV{PETSC_DIR}")
+  endif()
+  set(_petsc_arch "${PETSC_ARCH}")
+  if(NOT _petsc_arch AND DEFINED ENV{PETSC_ARCH})
+    set(_petsc_arch "$ENV{PETSC_ARCH}")
+  endif()
+  set(_petsc_pc_dirs "")
+  if(_petsc_dir)
+    list(APPEND _petsc_pc_dirs "${_petsc_dir}/${_petsc_arch}/lib/pkgconfig" "${_petsc_dir}/lib/pkgconfig")
+  endif()
+  list(APPEND _petsc_pc_dirs "/usr/lib/petscdir/petsc-real/lib/pkgconfig")
+  foreach(_d IN LISTS _petsc_pc_dirs)
+    if(EXISTS "${_d}")
+      set(ENV{PKG_CONFIG_PATH} "${_d}:$ENV{PKG_CONFIG_PATH}")
+    endif()
+  endforeach()
   pkg_check_modules(PETSC REQUIRED IMPORTED_TARGET PETSc)
+  message(STATUS "PETSc ${PETSC_VERSION}: ${PETSC_INCLUDE_DIRS}")
+
+  # The backend needs PetscScalar = double (real build) and a PetscInt that holds every int
+  # index (32-bit PETSc indices match ours; 64-bit ones are a safe widening).
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_LIBRARIES PkgConfig::PETSC MPI::MPI_CXX)
+  check_cxx_source_compiles("
+#include <petscsys.h>
+#include <type_traits>
+static_assert(std::is_same<PetscScalar, double>::value, \"PetscScalar\");
+static_assert(sizeof(PetscInt) >= sizeof(int) && std::is_signed<PetscInt>::value, \"PetscInt\");
+int main() { return 0; }" CSTFEM_PETSC_TYPES_OK)
+  unset(CMAKE_REQUIRED_LIBRARIES)
+  if(NOT CSTFEM_PETSC_TYPES_OK)
+    message(FATAL_ERROR "USE_PETSC=ON needs a real double-precision PETSc (PetscScalar = double) "
+                        "whose PetscInt holds an int; the PETSc found does not compile the check "
+                        "(see CMakeFiles/CMakeConfigureLog.yaml)")
+  endif()
 endif()
 
 # Generated header lives in the build tree.
@@ -74,6 +112,7 @@ if(USE_PARMETIS)
   target_link_libraries(cstfem PUBLIC ParMETIS::ParMETIS)
 endif()
 if(USE_PETSC)
+  target_sources(cstfem PRIVATE src/petsc_backend.cpp)
   target_link_libraries(cstfem PUBLIC PkgConfig::PETSC)
 endif()
 

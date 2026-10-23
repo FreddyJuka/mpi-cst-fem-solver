@@ -59,6 +59,19 @@ foreach(t test_partition test_distributed)
   endif()
 endforeach()
 
+# ---- PETSc backend vs the in-house solver (only with -DUSE_PETSC=ON; not in CI)
+if(USE_PETSC)
+  add_executable(test_petsc test_petsc.cpp)
+  target_link_libraries(test_petsc PRIVATE cstfem)
+  target_compile_definitions(test_petsc PRIVATE CSTFEM_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+  foreach(n 1 2 4)
+    add_test(NAME test_petsc_np${n}
+      COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${n} ${_mpi_extra}
+              $<TARGET_FILE:test_petsc> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(test_petsc_np${n} PROPERTIES ENVIRONMENT "${_mpi_env}")
+  endforeach()
+endif()
+
 # ---- End-to-end Kirsch runs of cstfem_solve on the committed L0 and L1 meshes
 set(_e2e_dirs "${CMAKE_CURRENT_BINARY_DIR}/e2e_kirsch_L0" "${CMAKE_CURRENT_BINARY_DIR}/e2e_kirsch_L1")
 # Parallel-output runs on L1 (rtol 1e-12): serial reference, distributed path on 1 rank, 2, 4.
@@ -144,6 +157,39 @@ kirsch.a         = 0.1
   set_tests_properties(e2e_par_${name}_timings PROPERTIES FIXTURES_REQUIRED e2e_par)
 endforeach()
 
+# solver = petsc end to end (GAMG on 2 ranks): metadata, PETSc phases, output vs serial.
+if(USE_PETSC)
+  set(dir "${CMAKE_CURRENT_BINARY_DIR}/e2e_par_petsc_np2")
+  set(case "${CMAKE_CURRENT_BINARY_DIR}/kirsch_L1_par_petsc_np2.case")
+  file(WRITE "${case}"
+"mesh             = ${CMAKE_CURRENT_SOURCE_DIR}/data/kirsch_L1.msh
+plane            = plane_stress
+E                = 210e9
+nu               = 0.3
+thickness        = 0.01
+solver           = petsc
+rtol             = 1e-12
+max_iter         = 20000
+output_dir       = ${dir}
+bc.dirichlet     = left_sym:ux=0 ; bottom_sym:uy=0
+bc.traction      = kirsch_exact
+kirsch.sigma_inf = 100e6
+kirsch.a         = 0.1
+")
+  add_test(NAME e2e_par_petsc_np2 COMMAND ${CMAKE_COMMAND} -E rm -rf "${dir}")
+  add_test(NAME e2e_par_petsc_np2_run
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${_mpi_extra}
+            $<TARGET_FILE:cstfem_solve> "${case}" ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(e2e_par_petsc_np2 PROPERTIES FIXTURES_SETUP e2e_petsc_clean)
+  set_tests_properties(e2e_par_petsc_np2_run PROPERTIES
+    FIXTURES_SETUP e2e_petsc FIXTURES_REQUIRED e2e_petsc_clean ENVIRONMENT "${_mpi_env}"
+    FAIL_REGULAR_EXPRESSION "error:|WARNING|NOT converged")
+  add_test(NAME e2e_par_petsc_np2_timings
+    COMMAND ${CMAKE_COMMAND} "-DDIR=${dir}" -DEXPECT_PATH=distributed -DEXPECT_RANKS=2
+            -DEXPECT_PETSC=gamg -P "${CMAKE_CURRENT_SOURCE_DIR}/check_timings.cmake")
+  set_tests_properties(e2e_par_petsc_np2_timings PROPERTIES FIXTURES_REQUIRED e2e_petsc)
+endif()
+
 # path = serial with more than one rank is a clear error.
 add_test(NAME e2e_path_serial_np2_rejected
   COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${_mpi_extra}
@@ -174,12 +220,16 @@ if(Python3_Interpreter_FOUND)
     endforeach()
     # Parallel output vs the serial run: displacement by Gmsh tag, element arrays by element
     # id, gathered CSVs; relative max difference < 1e-8.
-    foreach(name distributed_np1 np2 np4)
+    set(_vs_serial distributed_np1 np2 np4)
+    if(USE_PETSC)
+      list(APPEND _vs_serial petsc_np2)
+    endif()
+    foreach(name IN LISTS _vs_serial)
       add_test(NAME e2e_par_${name}_vs_serial
         COMMAND ${Python3_EXECUTABLE} "${PROJECT_SOURCE_DIR}/python/check_vtu.py"
                 "${CMAKE_CURRENT_BINARY_DIR}/e2e_par_${name}"
                 --compare "${CMAKE_CURRENT_BINARY_DIR}/e2e_par_serial_np1" --tol 1e-8)
-      set_tests_properties(e2e_par_${name}_vs_serial PROPERTIES FIXTURES_REQUIRED e2e_par)
+      set_tests_properties(e2e_par_${name}_vs_serial PROPERTIES FIXTURES_REQUIRED "e2e_par;e2e_petsc")
     endforeach()
   else()
     message(STATUS "numpy not found for ${Python3_EXECUTABLE}: VTU Python check not registered")

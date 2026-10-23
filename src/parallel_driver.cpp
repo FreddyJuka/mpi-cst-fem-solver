@@ -11,11 +11,13 @@
 #include <vector>
 
 #include "cstfem/case.hpp"
+#include "cstfem/config.hpp"
 #include "cstfem/distributed.hpp"
 #include "cstfem/driver.hpp"
 #include "cstfem/json.hpp"
 #include "cstfem/mpi_util.hpp"
 #include "cstfem/partition.hpp"
+#include "cstfem/petsc_backend.hpp"
 #include "cstfem/vtu.hpp"
 
 namespace cstfem {
@@ -207,15 +209,43 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
   timer.stop("bcs");
 
   // ---- solve
+  const bool petsc = s.solver_name == "petsc";
+  PetscSolveInfo pinfo;
+#if USE_PETSC
+  if (petsc && s.petsc_log_view) petsc_log_begin();
+#endif
   timer.start();
   std::vector<double> u;
   SolveBreakdown bd;
-  const SolverStats st =
-      solve_distributed(A, b, u, s.solver, comm, s.instrument ? &bd : nullptr);
+  SolverStats st;
+  if (petsc) {
+#if USE_PETSC
+    // Interleaved (x, y) of the owned nodes: owned DOF 2 n + c.
+    const std::vector<double> owned_xy(dm.local.xy.begin(),
+                                       dm.local.xy.begin() + 2 * static_cast<std::ptrdiff_t>(dm.num_owned));
+    st = solve_petsc(A, b, u, owned_xy, s.solver, {s.petsc_near_nullspace, s.petsc_options}, comm,
+                     &pinfo);
+#endif
+  } else {
+    st = solve_distributed(A, b, u, s.solver, comm, s.instrument ? &bd : nullptr);
+  }
   timer.stop("solve");
+  if (petsc) {
+    timer.set("petsc_matrix", pinfo.matrix_time);
+    timer.set("pc_setup", pinfo.pc_setup_time);
+    timer.set("ksp_solve", pinfo.ksp_solve_time);
+  }
+#if USE_PETSC
+  if (petsc && s.petsc_log_view) {
+    collective(comm, [&] {
+      if (rank == 0) std::filesystem::create_directories(s.output_dir);
+    });
+    petsc_log_view((std::filesystem::path(s.output_dir) / "petsc_log_view.txt").string(), comm);
+  }
+#endif
   // (min, max, mean) over ranks of each breakdown value, valid on rank 0.
   std::vector<std::pair<std::string, std::array<double, 3>>> breakdown;
-  if (s.instrument) {
+  if (s.instrument && !petsc) {
     const auto values = breakdown_values(bd, st.iterations);
     const int n = static_cast<int>(values.size());
     std::vector<double> mine(n), mn(n), mx(n), sum(n);
@@ -226,8 +256,8 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
     for (int i = 0; i < n; ++i) breakdown.push_back({values[i].first, {mn[i], mx[i], sum[i] / nranks}});
   }
   if (rank == 0) {
-    out << "cg_jacobi: " << st.message << "; true relative residual " << st.true_rel_residual
-        << "\n";
+    out << s.solver_name << ": " << st.message << "; true relative residual "
+        << st.true_rel_residual << "\n";
     if (!st.warning.empty()) err << st.warning << "\n";
     if (!st.converged) err << "error: solver did not converge: " << st.message << "\n";
   }
@@ -299,7 +329,7 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
     }
     out << "time per phase [s] (min / max / mean over ranks):\n";
     for (std::size_t i = 0; i < stats.size(); ++i)
-      out << "  " << std::left << std::setw(11) << timer.phases()[i] << std::right
+      out << "  " << std::left << std::setw(13) << timer.phases()[i] << std::right
           << std::setw(11) << std::setprecision(4) << stats[i][0] << std::setw(11) << stats[i][1]
           << std::setw(11) << stats[i][2] << "\n";
     out << std::setprecision(6);
@@ -326,8 +356,13 @@ int run_distributed(const CaseFile& c, const CaseSettings& s, const std::string&
        << "  \"partition\": {\"edge_cut\": " << summary.edge_cut
        << ", \"interface_nodes\": " << summary.interface_nodes << "},\n"
        << "  \"solver\": {\n"
-       << "    \"name\": \"cg_jacobi\",\n"
-       << "    \"rtol\": " << json_number(s.solver.rtol) << ",\n"
+       << "    \"name\": " << json_string(s.solver_name) << ",\n";
+    if (petsc)
+      js << "    \"ksp_type\": " << json_string(pinfo.ksp_type) << ",\n"
+         << "    \"pc_type\": " << json_string(pinfo.pc_type) << ",\n"
+         << "    \"near_nullspace\": " << (pinfo.near_nullspace ? "true" : "false") << ",\n"
+         << "    \"petsc_options\": " << json_string(s.petsc_options) << ",\n";
+    js << "    \"rtol\": " << json_number(s.solver.rtol) << ",\n"
        << "    \"max_iter\": " << s.solver.max_iter << ",\n"
        << "    \"iterations\": " << st.iterations << ",\n"
        << "    \"rel_residual\": " << json_number(st.rel_residual) << ",\n"

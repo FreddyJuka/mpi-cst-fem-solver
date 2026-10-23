@@ -67,9 +67,23 @@ CaseSettings read_case_settings(const CaseFile& c) {
     throw std::runtime_error(c.source() + ": path must be auto, serial or distributed, got '" +
                              s.path + "'");
   const std::string solver = c.get_string("solver", "cg_jacobi");
-  if (solver != "cg_jacobi")
-    throw std::runtime_error(c.source() + ": solver '" + solver +
-                             "' is not available (only cg_jacobi in this version)");
+  if (solver == "petsc" && !USE_PETSC)
+    throw std::runtime_error(c.source() +
+                             ": solver = petsc, but PETSc was not compiled in "
+                             "(configure with -DUSE_PETSC=ON)");
+  if (solver != "cg_jacobi" && solver != "petsc")
+    throw std::runtime_error(c.source() + ": solver must be cg_jacobi or petsc, got '" + solver +
+                             "'");
+  s.solver_name = solver;
+  auto get_bool = [&](const std::string& key, bool fallback) {
+    const std::string v = c.get_string(key, fallback ? "true" : "false");
+    if (v != "true" && v != "false")
+      throw std::runtime_error(c.source() + ": " + key + " must be true or false");
+    return v == "true";
+  };
+  s.petsc_near_nullspace = get_bool("petsc.near_nullspace", true);
+  s.petsc_log_view = get_bool("petsc.log_view", false);
+  s.petsc_options = c.get_string("petsc.options", "");
   s.solver.rtol = c.get_double("rtol", 1e-10);
   s.solver.max_iter = c.get_int("max_iter", 20000);
   return s;
@@ -99,6 +113,12 @@ std::string resolve_path(const CaseSettings& s, int nranks) {
   if (s.path == "serial" && nranks > 1)
     throw std::runtime_error("path = serial needs exactly 1 rank (launched with " +
                              std::to_string(nranks) + "); use path = auto or distributed");
+  if (s.solver_name == "petsc") {
+    if (s.path == "serial")
+      throw std::runtime_error("solver = petsc runs on the distributed path only; use path = "
+                               "auto or distributed");
+    return "distributed";
+  }
   if (s.path == "auto") return nranks == 1 ? "serial" : "distributed";
   return s.path;
 }
@@ -107,7 +127,8 @@ const std::vector<std::string>& known_case_keys() {
   static const std::vector<std::string> keys = {
       "mesh",   "plane",    "E",          "nu",           "thickness",   "partitioner",
       "solver", "rtol",     "max_iter",   "output_dir",   "bc.dirichlet", "bc.traction",
-      "kirsch.sigma_inf", "kirsch.a", "path", "instrument"};
+      "kirsch.sigma_inf", "kirsch.a", "path", "instrument", "petsc.near_nullspace",
+      "petsc.options", "petsc.log_view"};
   return keys;
 }
 

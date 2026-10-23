@@ -19,11 +19,20 @@ namespace cstfem {
 //                `distributed` on 1 rank runs the full distributed code path (the baseline
 //                for speedup studies).
 //   partitioner: metis | parmetis (parmetis needs -DUSE_PARMETIS=ON).
+//   solver:      cg_jacobi (in-house) | petsc (needs -DUSE_PETSC=ON; distributed path only,
+//                so path = auto selects it on 1 rank too). PETSc keys:
+//                petsc.near_nullspace = true|false (default true): rigid-body near-null space;
+//                petsc.options = <PETSc options, unquoted> (e.g. -pc_type jacobi), applied last;
+//                petsc.log_view = true|false (default false): <output_dir>/petsc_log_view.txt.
 struct CaseSettings {
   std::string mesh_path, output_dir, plane_name;
   std::string path = "auto";
   std::string partitioner = "metis";
-  bool instrument = true;  // `instrument = true|false`: solver time breakdown
+  bool instrument = true;  // `instrument = true|false`: solver time breakdown (cg_jacobi)
+  std::string solver_name = "cg_jacobi";
+  bool petsc_near_nullspace = true;
+  std::string petsc_options;
+  bool petsc_log_view = false;
   PlaneCondition plane = PlaneCondition::Stress;
   double E = 0, nu = 0, thickness = 0;
   SolverOptions solver;
@@ -47,7 +56,7 @@ std::optional<KirschParams> add_case_tractions(const CaseFile& c, const Mesh& me
                                                double thickness, std::vector<double>& f);
 
 // Path actually used for `nranks` ranks: "serial" or "distributed". Throws if path = serial
-// with more than one rank.
+// with more than one rank, or with solver = petsc (distributed only).
 std::string resolve_path(const CaseSettings& s, int nranks);
 
 // Serial end-to-end run: case -> mesh -> assembly -> BCs -> solve -> stresses ->

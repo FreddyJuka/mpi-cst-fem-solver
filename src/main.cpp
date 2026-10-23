@@ -6,6 +6,9 @@
 
 #include "cstfem/config.hpp"
 #include "cstfem/parallel_driver.hpp"
+#if USE_PETSC
+#include "cstfem/petsc_backend.hpp"
+#endif
 #include "cstfem/version.hpp"
 
 int main(int argc, char** argv) {
@@ -14,6 +17,9 @@ int main(int argc, char** argv) {
   int size = 1;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
+#if USE_PETSC
+  cstfem::petsc_initialize();  // on MPI_COMM_WORLD; PETSc leaves MPI_Finalize to us
+#endif
 
   // Arguments are identical on all ranks, so every rank takes the same branch.
   std::string case_path;
@@ -47,6 +53,9 @@ int main(int argc, char** argv) {
     status = cstfem::run_case(case_path, MPI_COMM_WORLD, std::cout, std::cerr);
   }
 
+#if USE_PETSC
+  cstfem::petsc_finalize();
+#endif
   MPI_Finalize();
   return status;
 }

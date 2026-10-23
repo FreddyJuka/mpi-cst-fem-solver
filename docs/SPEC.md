@@ -45,6 +45,9 @@ nu              = 0.3
 thickness       = 0.01
 partitioner     = metis          # metis | parmetis
 solver          = cg_jacobi      # cg_jacobi | petsc
+# petsc.near_nullspace = true    # petsc only: rigid-body near-null space for GAMG
+# petsc.options        = -pc_type jacobi   # petsc only: extra PETSc options
+# petsc.log_view       = false   # petsc only: <output_dir>/petsc_log_view.txt
 rtol            = 1e-10
 max_iter        = 20000
 output_dir      = results/kirsch_L3
@@ -85,6 +88,13 @@ kirsch.a         = 0.1
   - Jacobi (diagonal) preconditioner.
   - Stopping criterion: `‖r_k‖₂ / ‖b‖₂ < rtol`.
 - **Optional backend `petsc`** (CMake `-DUSE_PETSC=ON`): KSPCG + PCGAMG, for comparison in the benchmarks.
+  - PETSc is initialized on `MPI_COMM_WORLD` after `MPI_Init` and finalized before `MPI_Finalize`, only in builds with the backend.
+  - The matrix is a MATMPIAIJ built from our distributed CSR after Dirichlet elimination: owned rows are contiguous per rank (the PETSc ownership), halo columns are mapped back to global indices, block size 2, marked symmetric positive definite.
+  - Near-null space: the three rigid-body modes from the owned node coordinates (`MatNullSpaceCreateRigidBody`), switchable with `petsc.near_nullspace = true|false` (default true).
+  - KSPCG with `KSP_NORM_UNPRECONDITIONED`, relative tolerance `rtol`, absolute tolerance 1e-300, `max_iter`; default PC GAMG; `KSPSetFromOptions` with extra options from `petsc.options` (e.g. `-pc_type jacobi`); `petsc.log_view = true` writes `-log_view` to `<output_dir>/petsc_log_view.txt`.
+  - Reported: iterations, PETSc's final residual and the true residual `b - A x` recomputed with our operator, PC setup and KSP solve times separately in `timings.json`, KSP and PC types. The solution is copied back into the owned vector; postprocessing and output are unchanged.
+  - The backend runs on the distributed path only (also on 1 rank).
+  - Requires a real double-precision PETSc whose `PetscInt` holds an `int` (checked at configure and compile time).
 - Expected behavior: CG+Jacobi iterations grow as O(h⁻¹), whereas GAMG keeps iterations roughly constant. Benchmarks therefore report time per iteration in addition to total time.
 
 ## 8. Verification: Kirsch problem
@@ -140,7 +150,7 @@ mpi-cst-fem-solver/
 - Required: CMake ≥ 3.20, C++17, MPI (OpenMPI or MPICH), METIS.
 - Optional (all OFF by default):
   - `-DUSE_PARMETIS=ON`: ParMETIS parallel partitioner.
-  - `-DUSE_PETSC=ON`: PETSc solver backend (pkg-config).
+  - `-DUSE_PETSC=ON`: PETSc solver backend (pkg-config module `PETSc`; also searched in `PETSC_DIR[/PETSC_ARCH]` and `/usr/lib/petscdir/petsc-real`).
 - Python ≥ 3.10: `gmsh`, `numpy`, `matplotlib`.
 
 ### Licensing policy
@@ -148,6 +158,7 @@ mpi-cst-fem-solver/
 - No third-party source code is vendored; dependencies are found on the system via CMake.
 - The default build links MPI and METIS dynamically from the system. METIS is Apache-2.0, with some bundled GKlib files under BSD-3-clause and LGPL-2.1+ (per the Debian/Ubuntu `libmetis-dev` copyright file); OpenMPI is distributed under a BSD-style license with bundled components under their own terms (including LGPL). The repository does not vendor or redistribute any of them, so the repository code remains MIT. The licenses must be re-checked for the installed versions.
 - ParMETIS has its own terms; its copyright file states: "It can be freely used for educational and research purposes by non-profit institutions and US government agencies only. Other organizations are allowed to use ParMETIS/METIS only for evaluation purposes, and any further uses will require prior approval. The software may not be sold or redistributed without prior approval." It is strictly optional, is never redistributed (no vendored source, no release binaries, no container images that include it), and is not used in CI.
+- PETSc (optional) is BSD-2-clause per the Debian/Ubuntu copyright file of PETSc 3.19.6; the libraries the Debian PETSc build links (hypre, MUMPS, SuperLU, PT-Scotch, Trilinos ML, ...) have their own licenses. PETSc is not used in CI and not redistributed.
 - The README includes a "Third-party dependencies" section listing each dependency, its license, and a notice that ParMETIS terms are accepted by the user when installing it. The license text of the installed ParMETIS version must be checked before writing that notice.
 
 ## 13. Testing
@@ -157,6 +168,7 @@ mpi-cst-fem-solver/
 - **Parallel consistency:** the solution with P = 1, 2, 4 ranks agrees to within the solver tolerance.
 - Mesh reader test on a small committed `.msh` file.
 - CTest runs MPI tests through `mpiexec -n N` (with `--oversubscribe` in CI).
+- PETSc backend (only with `-DUSE_PETSC=ON`, P = 1, 2, 4): PETSc CG + Jacobi against the in-house CG + Jacobi on `kirsch_L1` (rtol 1e-12, solution difference < 1e-8, iteration counts reported); PETSc CG + GAMG against the in-house solution (< 1e-8); patch tests with GAMG (< 1e-9); Kirsch error metrics equal to the in-house ones within 1e-8.
 
 ## 14. CI
 
