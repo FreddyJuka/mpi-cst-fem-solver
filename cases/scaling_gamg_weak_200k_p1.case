@@ -1,0 +1,20 @@
+# GAMG benchmark case (gamg_weak_200k_p1); settings as in cases/kirsch_L*.case plus path/instrument.
+# Paths are relative to the working directory (run from the repository root).
+mesh             = meshes/scaling_weak_200k_p1.msh
+plane            = plane_stress
+E                = 210e9
+nu               = 0.3
+thickness        = 0.01
+partitioner      = metis
+path             = distributed
+instrument       = true
+solver           = petsc
+petsc.near_nullspace = true
+rtol             = 1e-10
+max_iter         = 20000
+output_dir       = results/gamg/out
+# boundary conditions
+bc.dirichlet     = left_sym:ux=0 ; bottom_sym:uy=0
+bc.traction      = kirsch_exact
+kirsch.sigma_inf = 100e6
+kirsch.a         = 0.1

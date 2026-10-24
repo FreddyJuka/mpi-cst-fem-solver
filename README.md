@@ -2,7 +2,7 @@
 
 A parallel 2D linear-elastic finite element solver in C++ using MPI domain decomposition and Constant Strain Triangle (CST) elements. A Python toolchain (Gmsh API) generates meshes and drives benchmarks of parallel speedup and scalability.
 
-Status: Milestone 7a (optional PETSc backend; verified against the Kirsch solution). See [docs/SPEC.md](docs/SPEC.md) and the verification report [docs/VERIFICATION.md](docs/VERIFICATION.md) (convergence rates, figures).
+Status: Milestone 7b (optional PETSc backend and its GAMG benchmark; verified against the Kirsch solution). See [docs/SPEC.md](docs/SPEC.md) and the verification report [docs/VERIFICATION.md](docs/VERIFICATION.md) (convergence rates, figures).
 
 ## Build
 
@@ -66,6 +66,8 @@ which prints a partition report and writes `partition.pvtu` with one piece per r
 `build/benchmarks/stream_triad [elements] [repetitions]` is a STREAM-like triad: each MPI rank runs it on its own arrays at the same time, e.g. `mpiexec -n 4 --bind-to core --map-by core build/benchmarks/stream_triad`, to see where memory bandwidth saturates.
 
 The strong and weak scaling study (METIS vs ParMETIS, SpMV bandwidth, analysis) is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md); `python/run_scaling.py` reproduces it.
+
+On the single laptop node used here, PETSc CG + GAMG (rigid-body near-null space) keeps the iteration count flat (22-26 from 50k to 2.0 M DOFs, against 2,168-9,122 for CG + Jacobi, which grows as DOFs^0.51) and is 1.7-17 times faster in total time and 3.4-43 times in solve-only time than the in-house CG + Jacobi. Its parallel speedup is poor on this node (solve-only speedup 2.2-3.0 at best, total-time speedup 1.5-1.8 at best), because the iterations are memory-bandwidth bound and the rank-0 serial phases (read + partition) grow to 39-42 % of the total time at p = 8-10. Multi-node behavior was not tested. Details, tables and figures: the "PETSc GAMG" section of [docs/BENCHMARKS.md](docs/BENCHMARKS.md); `python/run_scaling.py gamg-*` reproduces it (needs a `-DUSE_PETSC=ON` build in `build-gamg`).
 
 ## Tests
 

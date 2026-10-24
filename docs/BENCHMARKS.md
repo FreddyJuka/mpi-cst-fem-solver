@@ -1,6 +1,6 @@
-# Benchmarks: strong and weak scaling (Milestone 6b)
+# Benchmarks: strong and weak scaling (Milestones 6b and 7b)
 
-All numbers on this page come from `docs/benchmark_results.json`, produced by `python/run_scaling.py` and plotted by `python/plot_scaling.py`. Nothing here was tuned or edited by hand. The solver and C++ sources were not changed for this study.
+All numbers on this page come from `docs/benchmark_results.json` (Milestone 6b: sections up to "Untested hypotheses") and `docs/benchmark_gamg_results.json` (Milestone 7b: section "PETSc GAMG"), produced by `python/run_scaling.py` and plotted by `python/plot_scaling.py` and `python/plot_gamg.py`. Nothing here was tuned or edited by hand. The solver and C++ sources were not changed for this study.
 
 ## Hardware and its limitations
 
@@ -239,6 +239,236 @@ These are **hypotheses, not findings**. No experiment in this study tests them, 
 
 1. **CV > 5 % concentrated at p = 2 (4 of the 8 noisy configurations).** Possibly rank 0 shares virtual core 0 with system interrupt handling and Hyper-V vCPU scheduling, so a run with few ranks is more exposed to a disturbed core 0 than a run in which the other ranks average it out or are limited by memory bandwidth anyway. A possible test: offset the rank placement so that core 0 is not used (for example with Open MPI `--cpu-set` excluding core 0) and compare the CV at p = 2.
 2. **Read phase slowing down with p** (L6: 1.33 s at p = 1, 2.25 s at p = 8, while only rank 0 reads). Possibly the other ranks busy-poll inside Open MPI collectives while rank 0 reads, competing with rank 0 for CPU time and memory bandwidth. A possible test: rerun with `OMPI_MCA_mpi_yield_when_idle=1` and compare the read time.
+
+## PETSc GAMG (Milestone 7b)
+
+This section compares the optional PETSc backend (`solver = petsc`: CG on the unpreconditioned residual with PCGAMG and the rigid-body near-null space, Milestone 7a) with the in-house CG + Jacobi. Numbers come from `docs/benchmark_gamg_results.json` (`python/run_scaling.py gamg-*`, tables by `python/gamg_tables.py`, figures by `python/plot_gamg.py`). The C++ sources were not changed. The framing of the sections above applies unchanged: **one laptop, one node, shared-memory MPI only; no multi-node test was possible**, so nothing here predicts cluster behavior.
+
+**Cross-check (from 7a).** On `kirsch_L1` with rtol 1e-12, in-house CG + Jacobi and PETSc CG + Jacobi both take 295 iterations at np = 1, 2 and 4 and agree to 3-4e-15 (relative). The two solvers therefore implement the same algorithm and stopping test; differences below are due to the preconditioner, not to the CG loop. (On L4-L6 at rtol 1e-10 the two Jacobi variants differ by at most 2 iterations, from reduction order.)
+
+### Methodology differences from 6b
+
+- **The Jacobi data in this section are the medians of the 6b study** (`docs/benchmark_results.json`; 1 warm-up + 5 repetitions for L4 and L5, + 3 for L6 at p = 1, 2, 4, 8). They were not re-measured; the anchor below checks that the machine behaves the same way.
+- **GAMG runs: 1 warm-up (discarded) + 5 repetitions for every configuration**, including L6 and the 200k weak series, and **all 7 rank counts** (p = 1, 2, 3, 4, 6, 8, 10) for every group. 6b used only p = 1, 2, 4, 8 and 3 repetitions for those two. L6 and weak-200k Jacobi therefore have no counterpart at p = 3, 6, 10. The 200k-per-rank meshes for p = 3, 6, 10 were already generated in 6b and reused.
+- Same settings as 6b: `path = distributed`, METIS, `plane_stress`, `rtol = 1e-10`, `instrument = true`, `mpiexec --bind-to core --map-by core`, interleaved repetitions with the np order rotated each repetition. The cases are `cases/scaling_gamg_*.case` (`solver = petsc`, `petsc.near_nullspace = true`, default PCGAMG).
+- **Binary:** a separate Release build, `build-gamg` (`-DUSE_PETSC=ON`, PETSc 3.19.6). The Jacobi anchor runs use this same binary with `solver = cg_jacobi`.
+- **Anchor:** in-house CG + Jacobi on L5 at p = 1, 4, 8, 1 warm-up + 3 repetitions, interleaved with the GAMG L5 runs, to check that machine conditions match 6b.
+- **Solve-only time.** For GAMG it is `pc_setup + ksp_solve` (each the maximum over ranks); the conversion of our CSR matrix to PETSc (`petsc_matrix`, 0.1-0.4 s for L6) is shown separately but counts in the total. For Jacobi it is the whole `solve` phase of 6b (its Jacobi setup is a diagonal extraction, in the noise). **Total** is the maximum over ranks of the whole run, including output.
+- **CV** is the sample standard deviation over the repetitions divided by the mean, for total and for solve-only time; a configuration is flagged (warning sign) when either exceeds 5 %.
+- Strong speedup, efficiency and Karp-Flatt are defined as above, on the median, relative to GAMG at p = 1 of the same mesh, for the total and for the solve-only time.
+
+### Anchor check against 6b
+
+| config | anchor median [s] | 6b median [s] | ratio |  |
+|---|---|---|---|---|
+| np1_total | 35.9 | 35.1 | 1.02 | ok |
+| np1_solve | 34.1 | 33.2 | 1.03 | ok |
+| np4_total | 19.4 | 21.1 | 0.92 | ok |
+| np4_solve | 17.8 | 19.5 | 0.912 | ok |
+| np8_total | 20.9 | 21.2 | 0.985 | ok |
+| np8_solve | 18.7 | 19.5 | 0.961 | ok |
+
+All six ratios are within 10 % (largest deviation: p = 4, where the anchor was 8-9 % faster), so no anchor is flagged and the 6b Jacobi medians are used as they are.
+
+### GAMG strong scaling
+
+| p | its | total [s] | CV total % | solve-only [s] | CV solve % | S total | E total | Karp–Flatt (total) | S solve | E solve |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 23 | 0.956 | 5.9 ⚠ | 0.527 | 3.9 | 1 | 1 | – | 1 | 1 |
+| 2 | 23 | 0.649 | 1.4 | 0.277 | 1.4 | 1.47 | 0.737 | 0.36 | 1.9 | 0.95 |
+| 3 | 23 | 0.582 | 2.7 | 0.228 | 4.2 | 1.64 | 0.547 | 0.41 | 2.32 | 0.772 |
+| 4 | 23 | 0.571 | 1.9 | 0.212 | 3.2 | 1.68 | 0.419 | 0.46 | 2.49 | 0.622 |
+| 6 | 23 | 0.571 | 4.6 | 0.206 | 4.1 | 1.68 | 0.279 | 0.52 | 2.56 | 0.426 |
+| 8 | 23 | 0.573 | 2.6 | 0.193 | 4.2 | 1.67 | 0.209 | 0.54 | 2.73 | 0.341 |
+| 10 | 23 | 0.564 | 6.6 ⚠ | 0.176 | 5.8 | 1.7 | 0.17 | 0.54 | 3 | 0.3 |
+
+| p | its | total [s] | CV total % | solve-only [s] | CV solve % | S total | E total | Karp–Flatt (total) | S solve | E solve |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 23 | 4.21 | 1.6 | 2.35 | 2.9 | 1 | 1 | – | 1 | 1 |
+| 2 | 23 | 3.13 | 2 | 1.38 | 1.8 | 1.34 | 0.672 | 0.49 | 1.69 | 0.847 |
+| 3 | 24 | 2.99 | 2.2 | 1.3 | 0.73 | 1.41 | 0.47 | 0.56 | 1.81 | 0.604 |
+| 4 | 23 | 2.8 | 3.7 | 1.14 | 3.4 | 1.5 | 0.375 | 0.55 | 2.06 | 0.516 |
+| 6 | 23 | 2.85 | 2.6 | 1.05 | 4.4 | 1.48 | 0.246 | 0.61 | 2.24 | 0.373 |
+| 8 | 23 | 3.39 | 2.6 | 1.11 | 2.9 | 1.24 | 0.155 | 0.78 | 2.1 | 0.263 |
+| 10 | 24 | 3.62 | 1.5 | 1.15 | 3 | 1.16 | 0.116 | 0.84 | 2.04 | 0.204 |
+
+| p | its | total [s] | CV total % | solve-only [s] | CV solve % | S total | E total | Karp–Flatt (total) | S solve | E solve |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 24 | 28.1 | 18 ⚠ | 14.8 | 18 | 1 | 1 | – | 1 | 1 |
+| 2 | 25 | 20.2 | 15 ⚠ | 8.8 | 12 | 1.39 | 0.697 | 0.44 | 1.68 | 0.841 |
+| 3 | 26 | 17 | 10 ⚠ | 7.04 | 6.1 | 1.65 | 0.55 | 0.41 | 2.1 | 0.701 |
+| 4 | 24 | 15.3 | 6.3 ⚠ | 6.13 | 2.6 | 1.84 | 0.46 | 0.39 | 2.41 | 0.603 |
+| 6 | 25 | 15.3 | 4.6 ⚠ | 5.93 | 9.4 | 1.84 | 0.306 | 0.45 | 2.49 | 0.416 |
+| 8 | 25 | 16.3 | 6 ⚠ | 5.66 | 3 | 1.72 | 0.215 | 0.52 | 2.61 | 0.326 |
+| 10 | 26 | 17.2 | 2.5 | 5.84 | 4.5 | 1.63 | 0.163 | 0.57 | 2.53 | 0.253 |
+
+Medians over 5 repetitions. Karp-Flatt is on the total time. The phase times (median, min, max) of every configuration are in [`benchmark_gamg_phases.md`](benchmark_gamg_phases.md) and in the JSON.
+
+![GAMG strong speedup](figures/gamg_strong_speedup.png)
+
+### GAMG weak scaling
+
+| p | DOFs | its | solve-only [s] | CV solve % | total [s] | CV total % | weak eff. (solve-only) | weak eff. (total) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 49934 | 22 | 0.23 | 0.43 | 0.429 | 0.58 | 1 | 1 |
+| 2 | 99700 | 23 | 0.303 | 7.4 ⚠ | 0.697 | 8.5 | 0.761 | 0.616 |
+| 3 | 149710 | 23 | 0.438 | 5.2 ⚠ | 1.02 | 4.2 | 0.526 | 0.422 |
+| 4 | 199620 | 24 | 0.572 | 3.4 | 1.36 | 2.1 | 0.403 | 0.315 |
+| 6 | 300300 | 23 | 0.82 | 5 ⚠ | 2.18 | 5.2 | 0.281 | 0.197 |
+| 8 | 398258 | 24 | 1.12 | 0.88 | 2.87 | 1.2 | 0.205 | 0.15 |
+| 10 | 499818 | 23 | 1.4 | 0.53 | 3.79 | 0.91 | 0.165 | 0.113 |
+
+| p | DOFs | its | solve-only [s] | CV solve % | total [s] | CV total % | weak eff. (solve-only) | weak eff. (total) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 199620 | 23 | 1.27 | 6.4 ⚠ | 2.32 | 4.3 | 1 | 1 |
+| 2 | 398258 | 24 | 1.85 | 6.6 ⚠ | 3.98 | 6.6 | 0.685 | 0.584 |
+| 3 | 600392 | 23 | 2.4 | 7.3 ⚠ | 5.48 | 4.9 | 0.528 | 0.424 |
+| 4 | 800598 | 24 | 3 | 14 ⚠ | 7.1 | 8.1 | 0.422 | 0.327 |
+| 6 | 1200700 | 25 | 4.48 | 8.3 ⚠ | 10.7 | 6.7 | 0.282 | 0.217 |
+| 8 | 1604862 | 25 | 6.21 | 6.2 ⚠ | 16.1 | 4.3 | 0.204 | 0.144 |
+| 10 | 2003246 | 26 | 8.53 | 8.9 ⚠ | 22.5 | 6.6 | 0.148 | 0.103 |
+
+![GAMG weak scaling](figures/gamg_weak.png)
+
+### GAMG vs Jacobi: time to solution
+
+| mesh | p | its Jacobi | its GAMG | total Jacobi [s] | total GAMG [s] | speedup total | solve Jacobi [s] | solve-only GAMG [s] | speedup solve |
+|---|---|---|---|---|---|---|---|---|---|
+| L4 | 1 | 2168 | 23 | 2.96 | 0.956 | 3.09 | 2.56 | 0.527 | 4.85 |
+| L4 | 2 | 2171 | 23 | 1.76 | 0.649 | 2.72 | 1.4 | 0.277 | 5.05 |
+| L4 | 3 | 2168 | 23 | 1.39 | 0.582 | 2.39 | 1.05 | 0.228 | 4.61 |
+| L4 | 4 | 2168 | 23 | 1.17 | 0.571 | 2.05 | 0.845 | 0.212 | 3.99 |
+| L4 | 6 | 2168 | 23 | 1.08 | 0.571 | 1.9 | 0.761 | 0.206 | 3.69 |
+| L4 | 8 | 2168 | 23 | 0.976 | 0.573 | 1.7 | 0.654 | 0.193 | 3.39 |
+| L4 | 10 | 2168 | 23 | 0.946 | 0.564 | 1.68 | 0.59 | 0.176 | 3.36 |
+| L5 | 1 | 4408 | 23 | 35.1 | 4.21 | 8.34 | 33.2 | 2.35 | 14.1 |
+| L5 | 2 | 4407 | 23 | 23.8 | 3.13 | 7.6 | 22 | 1.38 | 15.9 |
+| L5 | 3 | 4407 | 24 | 21.9 | 2.99 | 7.33 | 20.2 | 1.3 | 15.6 |
+| L5 | 4 | 4407 | 23 | 21.1 | 2.8 | 7.52 | 19.5 | 1.14 | 17.2 |
+| L5 | 6 | 4406 | 23 | 20.6 | 2.85 | 7.22 | 18.9 | 1.05 | 18.1 |
+| L5 | 8 | 4407 | 23 | 21.2 | 3.39 | 6.26 | 19.5 | 1.11 | 17.5 |
+| L5 | 10 | 4406 | 24 | 21.9 | 3.62 | 6.05 | 20 | 1.15 | 17.4 |
+| L6 | 1 | 8871 | 24 | 414 | 28.1 | 14.7 | 405 | 14.8 | 27.4 |
+| L6 | 2 | 8871 | 25 | 296 | 20.2 | 14.7 | 287 | 8.8 | 32.6 |
+| L6 | 4 | 8870 | 24 | 264 | 15.3 | 17.2 | 256 | 6.13 | 41.8 |
+| L6 | 8 | 8869 | 25 | 253 | 16.3 | 15.5 | 244 | 5.66 | 43.1 |
+
+![Time to solution vs DOFs](figures/gamg_time_to_solution.png)
+
+![Iterations vs DOFs](figures/gamg_iterations.png)
+
+Iterations grow as DOFs^0.51 for Jacobi (fit through L4-L6 at p = 1) and as DOFs^0.02 for GAMG.
+
+### Rank-0 serial phases (read + partition) as a fraction of total time
+
+| case | p | GAMG | Jacobi (6b) |
+|---|---|---|---|
+| L4 | 1 | 7.46 | 2.45 |
+| L4 | 2 | 18.7 | 7.28 |
+| L4 | 3 | 22.5 | 10.1 |
+| L4 | 4 | 26.6 | 11.8 |
+| L4 | 6 | 32.6 | 14.8 |
+| L4 | 8 | 39 | 18.5 |
+| L4 | 10 | 42.4 | 22.8 |
+| L5 | 1 | 7.38 | 0.939 |
+| L5 | 2 | 17.8 | 2.45 |
+| L5 | 3 | 21.6 | 2.91 |
+| L5 | 4 | 27.2 | 3.16 |
+| L5 | 6 | 32.4 | 3.91 |
+| L5 | 8 | 39.1 | 4.17 |
+| L5 | 10 | 39.7 | 4.57 |
+| L6 | 1 | 8.99 | 0.371 |
+| L6 | 2 | 22 | 1.14 |
+| L6 | 3 | 26.1 | – |
+| L6 | 4 | 30 | 1.2 |
+| L6 | 6 | 32.7 | – |
+| L6 | 8 | 39.8 | 1.74 |
+| L6 | 10 | 41.7 | – |
+| weak 50k | 1 | 8.57 | 3.83 |
+| weak 50k | 2 | 18.1 | 6.61 |
+| weak 50k | 3 | 20.9 | 7.5 |
+| weak 50k | 4 | 22.3 | 5.81 |
+| weak 50k | 6 | 27.6 | 5.04 |
+| weak 50k | 8 | 29 | 4.32 |
+| weak 50k | 10 | 31.6 | 3.84 |
+| weak 200k | 1 | 7.31 | 1.47 |
+| weak 200k | 2 | 16.4 | 2.3 |
+| weak 200k | 3 | 21.6 | – |
+| weak 200k | 4 | 23.9 | 1.92 |
+| weak 200k | 6 | 28.7 | – |
+| weak 200k | 8 | 31.2 | 1.68 |
+| weak 200k | 10 | 36.1 | – |
+
+![L6 phase breakdown](figures/gamg_phase_breakdown_L6.png)
+
+### PETSc `-log_view` (L6, p = 4, one extra run)
+
+One run of `cases/scaling_gamg_strong_L6.case` at p = 4 with `petsc.log_view = true`; the full log is `results/gamg/logview/petsc_log_view.txt` (git-ignored, not reproduced here). PETSc's percentages are of the whole logged run (13.06 s, from `PetscInitialize` to the log), which includes reading, partitioning, assembly and output; events nest (PCApply is inside KSPSolve, MatMult inside PCApply), so the percentages do not add up. The log run also paid the logging overhead and is not part of the repetition statistics.
+
+| event | count | time (max over ranks) [s] | % of run | Max/Min time | MPI reductions |
+|---|---:|---:|---:|---:|---:|
+| KSPSolve (outer CG) | 1 | 3.95 | 30 | 1.0 | 85 |
+| PCApply (GAMG V-cycle, 24 applications) | 24 | 3.31 | 25 | 1.0 | 10 |
+| MatMult (all levels, smoothers and the outer A p) | 554 | 3.00 | 23 | 1.0 | 0 |
+| PCSetUp (GAMG hierarchy) | 2 | 2.21 | 17 | 1.0 | 811 |
+| MatMultAdd + MatMultTranspose (prolongation, restriction) | 240 | 0.45 | 4 | 1.0-1.1 | 0 |
+| VecScatterEnd (halo exchange wait) | 842 | 0.25 | 2 | 1.2 | 0 |
+| VecTDot (CG inner products) | 165 | 0.13 | 1 | 1.8 | 165 |
+| VecNorm | 26 | 0.024 | 0.2 | 1.3 | 26 |
+
+The log reports 935 MPI reductions in the whole run. 811 of them (87 %) are in the GAMG setup (coarsening and level construction), 85 in the outer KSPSolve. VecTDot and VecNorm together take 0.16 s and 1.2 % of the run. 165 VecTDot calls exceed the 48 that 24 CG iterations need, so most of them come from outside the outer solve (the outer KSPSolve itself counts 85 reductions in total).
+
+### Analysis
+
+**Algorithmic scalability: flat iteration counts.** With GAMG and the near-null space, CG needs 23, 23-24 and 24-26 iterations for L4, L5 and L6 (a 15.8-fold increase in DOFs), and 22-24 (50k per rank) and 23-26 (200k per rank) iterations for the weak series at p = 1 to 10 (a 10-fold increase). The fitted power is 0.02 against 0.51 for Jacobi (2,168 / 4,407 / 8,871 iterations). This is what the multigrid preconditioner is for, and it holds across mesh refinement and across rank counts (the hierarchy is built per partition, and still the count does not grow noticeably). Algorithmic scalability is therefore good.
+
+**Time to solution.** GAMG was faster in every configuration where both exist. Total time: 1.7-3.1 times on L4, 6.1-8.3 times on L5, 14.7-17.2 times on L6; solve-only: 3.4-5.1 times, 14.1-18.1 times and 27.4-43.1 times. The advantage grows with the mesh because Jacobi's iteration count grows with the mesh and GAMG's does not, while a GAMG iteration costs more (L6 at p = 1: 7.1 s / 24 iterations = 0.30 s per CG iteration plus 7.7 s setup, against 405 s / 8,871 = 0.046 s per Jacobi iteration). The total-time advantage is smaller than the solve-only advantage because setup, assembly and output are the same work in both. For L6 at p = 1 GAMG's total is 28.1 s against 414 s; L6 at p = 8 is 16.3 s against 253 s.
+
+**Parallel scalability is poor, and the cause is memory bandwidth plus serial setup.** GAMG's strong speedup on the solve-only time reaches 3.0 (L4, p = 10), 2.2 (L5, p = 6) and 2.6 (L6, p = 8), i.e. efficiencies of 0.30, 0.37 and 0.33; on the total time it saturates at 1.70 (L4), 1.50 (L5, p = 4) and 1.84 (L6, p = 4 and 6) and then falls (L5: 1.16 at p = 10). Karp-Flatt on the total time rises with p for L4 (0.36 to 0.54) and L5 (0.49 to 0.84), as in 6b: lost efficiency that grows with p is not a fixed serial fraction. Within the GAMG solve of L6, the setup scales better than the iterations: `pc_setup` goes from 7.7 s (p = 1) to 1.85 s (p = 10), a factor of 4.2, while `ksp_solve` goes from 7.1 s to 3.88 s, a factor of 1.8 and flat from p = 4 (3.71 s) to p = 10. The iterations are a sequence of sparse matrix-vector products, smoother sweeps and vector updates, which is the bandwidth-bound work analysed in 6b (about 4 ranks saturate the memory system at about 20 GB/s); the `-log_view` run shows MatMult as the largest single event (23 % of the run, 3.0 s) and the inner products and norms as 1.2 %. The `-log_view` supports "the iterations are matrix-vector-product dominated"; it does not measure the memory traffic of GAMG, so "bandwidth-bound" for the GAMG iterations is an inference from the flat `ksp_solve` time, not a measurement. In the weak series, iterations stay flat but the solve-only time grows from 0.23 s to 1.40 s (50k) and from 1.27 s to 8.53 s (200k) between p = 1 and p = 10, giving weak efficiencies of 0.17 and 0.15. That is the same behavior as the Jacobi weak series in 6b (time per iteration proportional to the total data when the aggregate bandwidth is flat), now without the confounding growth of the iteration count: with flat iterations, the whole growth is cost per iteration and per setup. The 10-fold growth in total data is matched by a 6.0 to 6.7-fold growth in solve-only time, less than proportional; one rank reaches only about half of the triad bandwidth in 6b (8.6 vs 15.5 GB/s on L6), which is consistent with that, but it was not measured for GAMG.
+
+**The bottleneck moves to the rank-0 serial phases.** With Jacobi the solve dominates: read + partition are 0.4 % of the L6 total at p = 1 and 1.7 % at p = 8, 0.9 % to 4.6 % for L5. With GAMG the solve is so much shorter that the same serial phases are 9.0 % of the L6 total at p = 1 and 39.8 % at p = 8 (L5: 7.4 % to 39.7 % at p = 10; L4: 7.5 % to 42.4 %; weak 200k: 7.3 % to 36.1 % at p = 10). In seconds, for L6 GAMG, read + partition go from 2.6 s at p = 1 to 6.5 s at p = 8 and 7.2 s at p = 10; rank 0 reads and partitions alone, so these phases cannot shrink with p and in this data they grow (read 2.23 s to 3.72 s; the cause was not investigated, see hypothesis 2 in the 6b list). Assembly also stops scaling after p = 4 (3.3 s at p = 4, 3.2 s at p = 8, 3.5 s at p = 10). This is the Amdahl shift: the solver became about 15 times faster on L6, but the total time of a run at p = 8 is 16.3 s of which read + partition is 6.5 s and the GAMG solve 5.7 s, so the next improvements to the total time are in parallel mesh input and partitioning (ParMETIS partitions faster in 6b, but reading is separate) rather than in the solver. This is consistent with the Karp-Flatt and speedup numbers above: the total-time speedup (1.84) is much lower than the solve-only speedup (2.4-2.6).
+
+**Limits of these numbers.** (1) The L6 p = 1 total times are bimodal: 19.7 and 20.2 s in two repetitions and 28.1-28.6 s in three, so the CV is 18 % and the L6 p = 1 baseline for speedup (28.1 s median) is uncertain; with the fast mode as baseline the L6 total speedups would be about 1.4 times lower. The cause was not diagnosed (the early probe and the 7a manual run were also in the fast mode, 19-20 s). (2) The CV flags (table below) cover most of the L6 and weak-200k configurations, so differences of a few percent between neighboring p are not resolved. (3) Jacobi comes from a different session than GAMG; the anchor agrees within 9 %, which is the resolution of the GAMG/Jacobi ratios, small against ratios of 6 to 43 but comparable to the L4 ratios at large p (1.7). (4) Everything is one laptop, one node.
+
+**Untested hypotheses (new).** (a) The bimodal L6 p = 1 time (about 20 s vs 28 s) may come from the host giving the VM a different core type or frequency in different repetitions; a test is to repeat L6 p = 1 many times with CPU-frequency and core-type information recorded on the host. (b) The assembly plateau at p >= 4 (3.2-3.5 s) may be the same memory-bandwidth saturation that limits the solve; a test is to measure the assembly memory traffic and compare it to the triad rate. Neither is tested here and no conclusion depends on them.
+
+### Noisy configurations (CV > 5 %)
+
+| group | key | CV total % | CV solve-only % |
+|---|---|---|---|
+| gamg_strong_L4 | np1 | 5.9 | 3.9 |
+| gamg_strong_L4 | np10 | 6.6 | 5.8 |
+| gamg_strong_L6 | np1 | 18 | 18 |
+| gamg_strong_L6 | np2 | 15 | 12 |
+| gamg_strong_L6 | np3 | 10 | 6.1 |
+| gamg_strong_L6 | np4 | 6.3 | 2.6 |
+| gamg_strong_L6 | np6 | 4.6 | 9.4 |
+| gamg_strong_L6 | np8 | 6 | 3 |
+| gamg_weak_50k | np2 | 8.5 | 7.4 |
+| gamg_weak_50k | np3 | 4.2 | 5.2 |
+| gamg_weak_50k | np6 | 5.2 | 5 |
+| gamg_weak_200k | np1 | 4.3 | 6.4 |
+| gamg_weak_200k | np2 | 6.6 | 6.6 |
+| gamg_weak_200k | np3 | 4.9 | 7.3 |
+| gamg_weak_200k | np4 | 8.1 | 14 |
+| gamg_weak_200k | np6 | 6.7 | 8.3 |
+| gamg_weak_200k | np8 | 4.3 | 6.2 |
+| gamg_weak_200k | np10 | 6.6 | 8.9 |
+
+### Reproducing the GAMG study
+
+```
+cmake -S . -B build-gamg -DCMAKE_BUILD_TYPE=Release -DUSE_PETSC=ON && cmake --build build-gamg -j
+python/.venv/bin/python python/run_scaling.py gamg-cases      # cases/scaling_gamg_*.case
+python/.venv/bin/python python/run_scaling.py gamg-probe      # one probe per largest case, estimate
+python/.venv/bin/python python/run_scaling.py gamg-run        # resumable; includes the Jacobi anchor
+python/.venv/bin/python python/run_scaling.py gamg-logview    # L6, p = 4, petsc.log_view = true
+python/.venv/bin/python python/run_scaling.py gamg-aggregate  # docs/benchmark_gamg_results.json
+python/.venv/bin/python python/plot_gamg.py                   # docs/figures/gamg_*.png
+python3 python/gamg_tables.py                                 # markdown tables
+```
+
+Raw outputs go to `results/gamg/` (git-ignored). The Jacobi side comes from `docs/benchmark_results.json`; the same warning about hardware and power settings applies.
 
 ## Reproducing
 

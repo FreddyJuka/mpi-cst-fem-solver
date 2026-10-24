@@ -9,6 +9,14 @@ Subcommands (all resumable; a run whose timings.json exists is skipped):
   aggregate  write docs/benchmark_results.json from the raw outputs
   parmetis   run the METIS vs ParMETIS comparison (needs a build with -DUSE_PARMETIS=ON)
 
+PETSc GAMG benchmark (Milestone 7b; needs build-gamg with -DUSE_PETSC=ON; raw outputs in
+results/gamg/, aggregate in docs/benchmark_gamg_results.json; Jacobi data comes from 6b):
+  gamg-cases      write cases/gamg_*.case (and generate missing weak meshes)
+  gamg-probe      one probe per largest case, then estimate the study time
+  gamg-run        run the GAMG groups and the interleaved Jacobi anchor (resumable)
+  gamg-logview    one L6 np=4 run with petsc.log_view = true
+  gamg-aggregate  write docs/benchmark_gamg_results.json
+
 Every run: path = distributed, partitioner as given, instrument = true, plane_stress,
 rtol = 1e-10, mpiexec --bind-to core --map-by core. Raw outputs go to results/scaling/.
 """
@@ -41,9 +49,20 @@ def group_np(name):
 
 
 def group_reps(name):
+    if name.startswith("gamg_"):
+        return GAMG_REPS
     return REDUCED_REPS if name in REDUCED_GROUPS else REPS
+
+
+def group_root(name):
+    return GAMG if name.startswith("gamg_") else SCALING
 PM_NP = [4, 8, 10]
+GAMG_REPS = 5
+ANCHOR_NP = [1, 4, 8]
+ANCHOR_REPS = 3
 SCALING = ROOT / "results" / "scaling"
+GAMG = ROOT / "results" / "gamg"
+EXE_GAMG = ROOT / "build-gamg" / "cstfem_solve"
 CASES = ROOT / "cases"
 MESHES = ROOT / "meshes"
 EXE = ROOT / "build" / "cstfem_solve"
@@ -87,6 +106,16 @@ def groups():
     for tag in WEAK_DOFS_PER_RANK:
         g[f"weak_{tag}"] = [dict(key=f"np{p}", np=p, case=case_path(f"weak_{tag}_p{p}"),
                                  exe=EXE, partitioner="metis") for p in group_np(f"weak_{tag}")]
+    for lvl in STRONG_LEVELS:
+        g[f"gamg_strong_L{lvl}"] = [dict(key=f"np{p}", np=p, case=case_path(f"gamg_strong_L{lvl}"),
+                                         exe=EXE_GAMG, partitioner="metis") for p in NP_LIST]
+    # Jacobi anchor (cases/scaling_strong_L5.case), interleaved with the GAMG L5 runs
+    g["gamg_strong_L5"] += [dict(key=f"anchor_np{p}", np=p, case=case_path("strong_L5"),
+                                 exe=EXE_GAMG, partitioner="metis", reps=ANCHOR_REPS)
+                            for p in ANCHOR_NP]
+    for tag in WEAK_DOFS_PER_RANK:
+        g[f"gamg_weak_{tag}"] = [dict(key=f"np{p}", np=p, case=case_path(f"gamg_weak_{tag}_p{p}"),
+                                      exe=EXE_GAMG, partitioner="metis") for p in NP_LIST]
     g["pm_L5"] = [dict(key=f"{part}_np{p}", np=p, case=case_path(f"pm_L5_{part}"), exe=EXE_PM,
                        partitioner=part) for part in ("metis", "parmetis") for p in PM_NP]
     return g
@@ -144,7 +173,7 @@ def cmd_meshes(args):
 
 # ----------------------------------------------------------------------------- running
 def run_dir(group, key, tag):
-    return SCALING / group / key / tag
+    return group_root(group) / group / key / tag
 
 
 def run_one(group, e, tag, force_record_bindings=True):
@@ -176,7 +205,7 @@ def run_one(group, e, tag, force_record_bindings=True):
     shutil.rmtree(out)
     (d / "wall.txt").write_text(f"{wall:.3f}\n")
     if force_record_bindings:
-        b = SCALING / "bindings" / f"{group}_{e['key']}.txt"
+        b = group_root(group) / "bindings" / f"{group}_{e['key']}.txt"
         if not b.exists():
             b.parent.mkdir(parents=True, exist_ok=True)
             b.write_text(" ".join(cmd) + "\n" + r.stderr)
@@ -192,6 +221,8 @@ def run_group(group, entries):
             print(f"[{group}] warmup {e['key']}: {w:.1f} s", flush=True)
     for r in range(nreps):
         for e in rotated(entries, r):
+            if r >= e.get("reps", nreps):
+                continue
             w, ran = run_one(group, e, f"rep{r}")
             if ran:
                 print(f"[{group}] rep{r} {e['key']}: {w:.1f} s", flush=True)
@@ -418,16 +449,231 @@ def cmd_parmetis(args):
     run_group("pm_L5", groups()["pm_L5"])
 
 
+# ----------------------------------------------------------------------------- GAMG (7b)
+GAMG_TEMPLATE_EDIT = ("solver           = cg_jacobi",
+                      "solver           = petsc\npetsc.near_nullspace = true")
+GAMG_PHASES = ["read", "partition", "distribute", "assembly", "bcs", "petsc_matrix", "pc_setup",
+               "ksp_solve", "postprocess", "output", "total"]
+
+
+def cmd_gamg_cases(args):
+    meta = json.loads((SCALING / "meshes.json").read_text())
+
+    def write(name, mesh):
+        text = CASE_TEMPLATE.format(title=f"gamg_{name}", mesh=mesh, partitioner="metis")
+        text = text.replace(*GAMG_TEMPLATE_EDIT).replace("results/scaling/out", "results/gamg/out")
+        text = text.replace("# Scaling study case", "# GAMG benchmark case")
+        case_path(f"gamg_{name}").write_text(text)
+
+    for lvl in STRONG_LEVELS:
+        write(f"strong_L{lvl}", meta[f"strong_L{lvl}"]["mesh"])
+    for tag in WEAK_DOFS_PER_RANK:
+        for p in NP_LIST:
+            name = f"weak_{tag}_p{p}"
+            if name not in meta or not (ROOT / meta[name]["mesh"]).exists():
+                sys.exit(f"missing mesh for {name}: run `run_scaling.py meshes` with the full np list")
+            write(name, meta[name]["mesh"])
+    print("wrote cases/gamg_*.case")
+
+
+def cmd_gamg_probe(args):
+    g = groups()
+    probes = {}
+    for name, key in (("gamg_strong_L4", "np1"), ("gamg_strong_L5", "np1"), ("gamg_strong_L6", "np1"),
+                      ("gamg_weak_50k", "np10"), ("gamg_weak_200k", "np10")):
+        e = next(x for x in g[name] if x["key"] == key)
+        w, ran = run_one(name, e, "probe", force_record_bindings=False)
+        wall = w if ran else float((run_dir(name, key, "probe") / "wall.txt").read_text())
+        t = json.loads((run_dir(name, key, "probe") / "timings.json").read_text())
+        probes[f"{name}/{key}"] = dict(wall=wall, iterations=t["solver"]["iterations"],
+                                       dofs=t["dofs"])
+        print(name, key, probes[f"{name}/{key}"], flush=True)
+    anchor = 36.0   # 6b: L5 np1 Jacobi wall (probe not repeated; the first warm-up measures it)
+    # Upper bound: every np of a group costs as much as its slowest probe (np1 for strong,
+    # np10 for weak); the Jacobi anchor is 4 sets of (np1, np4, np8) at the 6b L5 wall times.
+    per_pass = {n: v["wall"] * len(NP_LIST) for n, v in
+                ((k.split("/")[0], v) for k, v in probes.items())}
+    per_pass["anchor"] = anchor * (1 + 0.55 + 0.55) * 1.1
+    passes = {n: GAMG_REPS + 1 for n in per_pass}
+    passes["anchor"] = ANCHOR_REPS + 1
+    total = sum(per_pass[n] * passes[n] for n in per_pass)
+    est = dict(probes=probes, per_pass_seconds=per_pass, passes=passes, total_seconds=total,
+               total_hours=total / 3600,
+               basis="upper bound: every np costs as much as the np=1 (strong) / np=10 (weak) probe")
+    (GAMG / "estimate.json").write_text(json.dumps(est, indent=1))
+    print(json.dumps(est, indent=1))
+
+
+def cmd_gamg_run(args):
+    g = groups()
+    names = args.groups or [n for n in g if n.startswith("gamg_")]
+    for name in names:
+        run_group(name, g[name])
+
+
+def cmd_gamg_logview(args):
+    d = GAMG / "logview"
+    log = d / "petsc_log_view.txt"
+    if log.exists():
+        print("exists:", log)
+        return
+    d.mkdir(parents=True, exist_ok=True)
+    text = case_path("gamg_strong_L6").read_text()
+    text = re.sub(r"^output_dir\s*=.*$", f"output_dir       = {(d / 'out').relative_to(ROOT)}", text,
+                  flags=re.M) + "petsc.log_view    = true\n"
+    case = d / "run.case"
+    case.write_text(text)
+    cmd = MPI_PREFIX + ["-n", "4", str(EXE_GAMG), str(case.relative_to(ROOT))]
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    (d / "stdout.txt").write_text(r.stdout)
+    (d / "stderr.txt").write_text(r.stderr)
+    if r.returncode != 0:
+        sys.exit(r.stderr[-2000:])
+    shutil.copy(d / "out" / "petsc_log_view.txt", log)
+    shutil.copy(d / "out" / "timings.json", d / "timings.json")
+    shutil.rmtree(d / "out")
+    print("wrote", log)
+
+
+def gamg_extract(t):
+    tm = t["timings"]
+    ph = {k: tm[k]["max"] for k in GAMG_PHASES if k in tm}
+    ph["solve"] = tm["solve"]["max"]
+    if "pc_setup" in ph:   # PETSc: pc_setup + ksp_solve (matrix conversion reported separately)
+        solve_only = ph["pc_setup"] + ph["ksp_solve"]
+    else:                  # in-house Jacobi anchor: the whole solve phase
+        solve_only = ph["solve"]
+    return dict(iterations=t["solver"]["iterations"], dofs=t["dofs"], phases=ph,
+                solve_only=solve_only, total=ph["total"], solver=t["solver"]["name"],
+                true_rel_residual=t["solver"].get("true_rel_residual"))
+
+
+def gamg_stats(values):
+    return stats(values)
+
+
+def gamg_summary(runs):
+    s = dict(total=stats([r["total"] for r in runs]),
+             solve_only=stats([r["solve_only"] for r in runs]),
+             iterations=stats([r["iterations"] for r in runs]))
+    s["phases"] = {k: stats([r["phases"][k] for r in runs]) for k in runs[0]["phases"]}
+    serial = [r["phases"]["read"] + r["phases"]["partition"] for r in runs]
+    s["serial_fraction"] = stats([a / r["total"] for a, r in zip(serial, runs)])
+    s["noisy"] = max(s["total"]["cv"], s["solve_only"]["cv"]) > 0.05
+    return s
+
+
+def cmd_gamg_aggregate(args):
+    g = groups()
+    out = dict(hardware=hardware_summary(), settings=dict(
+        path="distributed", partitioner="metis", instrument=True, plane="plane_stress",
+        rtol=1e-10, mpiexec_flags=" ".join(MPI_PREFIX[1:]), warmups=1,
+        repetitions=dict(gamg=GAMG_REPS, jacobi_anchor=ANCHOR_REPS), np_list=NP_LIST,
+        solve_only=("GAMG: pc_setup + ksp_solve (max over ranks each; petsc_matrix reported "
+                    "separately); Jacobi: the whole solve phase"),
+        jacobi_reference="docs/benchmark_results.json (Milestone 6b)"), groups={})
+    for name, entries in g.items():
+        if not name.startswith("gamg_"):
+            continue
+        data = {}
+        for e in entries:
+            runs = []
+            for r in range(e.get("reps", group_reps(name))):
+                f = run_dir(name, e["key"], f"rep{r}") / "timings.json"
+                if f.exists():
+                    runs.append(gamg_extract(json.loads(f.read_text())))
+            if runs:
+                data[e["key"]] = dict(np=e["np"], runs=runs, summary=gamg_summary(runs))
+        if data:
+            out["groups"][name] = data
+    ref = json.loads((ROOT / "docs" / "benchmark_results.json").read_text())["groups"]
+    G = out["groups"]
+    derived = {}
+
+    # strong scaling of GAMG
+    for lvl in STRONG_LEVELS:
+        name = f"gamg_strong_L{lvl}"
+        if name not in G or "np1" not in G[name]:
+            continue
+        base = G[name]["np1"]["summary"]
+        for key, d in G[name].items():
+            if key.startswith("anchor"):
+                continue
+            p, s = d["np"], d["summary"]
+            dd = d.setdefault("derived", {})
+            for what in ("total", "solve_only"):
+                S = base[what]["median"] / s[what]["median"]
+                dd[what] = dict(speedup=S, efficiency=S / p, karp_flatt=karp_flatt(S, p),
+                                speedup_lo=base[what]["median"] / s[what]["max"],
+                                speedup_hi=base[what]["median"] / s[what]["min"])
+            # comparison with Jacobi (6b medians), where 6b has the same (mesh, np)
+            j = ref.get(f"strong_L{lvl}", {}).get(key)
+            if j:
+                js, jt = j["summary"]["solve"]["median"], j["summary"]["total"]["median"]
+                dd["vs_jacobi"] = dict(
+                    jacobi_total=jt, jacobi_solve=js, jacobi_iterations=j["summary"]["iterations"]["median"],
+                    jacobi_serial_fraction=(j["summary"]["phases"]["read"]["median"] +
+                                            j["summary"]["phases"]["partition"]["median"]) / jt,
+                    speedup_total=jt / s["total"]["median"], speedup_solve=js / s["solve_only"]["median"])
+    # weak scaling of GAMG
+    for tag in WEAK_DOFS_PER_RANK:
+        name = f"gamg_weak_{tag}"
+        if name not in G or "np1" not in G[name]:
+            continue
+        t1 = G[name]["np1"]["summary"]["solve_only"]["median"]
+        tt1 = G[name]["np1"]["summary"]["total"]["median"]
+        for key, d in G[name].items():
+            s = d["summary"]
+            d["derived"] = dict(weak_efficiency_solve=t1 / s["solve_only"]["median"],
+                                weak_efficiency_total=tt1 / s["total"]["median"],
+                                dofs_per_rank=d["runs"][0]["dofs"] / d["np"])
+            j = ref.get(f"weak_{tag}", {}).get(key)
+            if j:
+                jt = j["summary"]["total"]["median"]
+                d["derived"]["jacobi_serial_fraction"] = (
+                    j["summary"]["phases"]["read"]["median"] +
+                    j["summary"]["phases"]["partition"]["median"]) / jt
+                d["derived"]["jacobi_total"] = jt
+                d["derived"]["jacobi_solve"] = j["summary"]["solve"]["median"]
+                d["derived"]["jacobi_iterations"] = j["summary"]["iterations"]["median"]
+    # anchor check against 6b
+    anchor = {}
+    if "gamg_strong_L5" in G:
+        for p in ANCHOR_NP:
+            a = G["gamg_strong_L5"].get(f"anchor_np{p}")
+            j = ref["strong_L5"].get(f"np{p}")
+            if not a or not j:
+                continue
+            for what, jv in (("total", j["summary"]["total"]["median"]),
+                             ("solve", j["summary"]["solve"]["median"])):
+                av = a["summary"]["total" if what == "total" else "solve_only"]["median"]
+                anchor[f"np{p}_{what}"] = dict(anchor=av, ref_6b=jv, ratio=av / jv,
+                                               flagged=abs(av / jv - 1) > 0.10)
+    out["anchor_check"] = anchor
+    f = ROOT / "docs" / "benchmark_gamg_results.json"
+    f.write_text(json.dumps(out, indent=1))
+    print("wrote", f)
+    print("anchor:", json.dumps({k: round(v["ratio"], 3) for k, v in anchor.items()}))
+    print("flagged anchor:", [k for k, v in anchor.items() if v["flagged"]])
+    noisy = [(n, k, round(d["summary"]["total"]["cv"], 3), round(d["summary"]["solve_only"]["cv"], 3))
+             for n, dd in G.items() for k, d in dd.items() if d["summary"]["noisy"]]
+    print("noisy (CV > 5 %):", noisy)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
-    for n in ("meshes", "probe", "estimate", "aggregate", "parmetis"):
+    for n in ("meshes", "probe", "estimate", "aggregate", "parmetis", "gamg-cases", "gamg-probe",
+              "gamg-logview", "gamg-aggregate"):
         sub.add_parser(n)
+    gr = sub.add_parser("gamg-run")
+    gr.add_argument("groups", nargs="*")
     r = sub.add_parser("run")
     r.add_argument("groups", nargs="*", help="subset of groups (default: strong and weak)")
     args = p.parse_args()
     SCALING.mkdir(parents=True, exist_ok=True)
-    globals()["cmd_" + args.cmd](args)
+    GAMG.mkdir(parents=True, exist_ok=True)
+    globals()["cmd_" + args.cmd.replace("-", "_")](args)
 
 
 if __name__ == "__main__":
