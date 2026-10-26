@@ -2,7 +2,7 @@
 
 namespace cstfem {
 
-// Project version string, e.g. "0.1.0".
+// Project version string, e.g. "1.0.0".
 const char* version();
 
 }  // namespace cstfem

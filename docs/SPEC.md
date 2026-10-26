@@ -1,6 +1,6 @@
 # mpi-cst-fem-solver — Technical Specification
 
-Version 0.1 (draft for review) · Owner: FreddyJuka · License: MIT
+Version 1.0 · Status: v1.0 · Author: Freddy Juka · License: MIT
 
 ## 1. Purpose
 
