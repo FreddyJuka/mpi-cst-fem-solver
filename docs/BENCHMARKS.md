@@ -359,6 +359,51 @@ Medians over 5 repetitions. Karp-Flatt is on the total time. The phase times (me
 
 Iterations grow as DOFs^0.51 for Jacobi (fit through L4-L6 at p = 1) and as DOFs^0.02 for GAMG.
 
+### L6 p = 1 bimodality: diagnosis and both baselines (Milestone 7c)
+
+**What was measured.** The five L6 GAMG p = 1 repetitions of 7b took 19.7, 20.2, 28.1, 28.3, 28.6 s (in-program total; wall times 20.2, 20.7, 28.6, 28.8, 29.2 s). The hypothesis tested here was that the slow mode is memory pressure (the VM has 7.7 GiB RAM and 2 GiB swap). The diagnosis reran the case with the same binary (`build-gamg/cstfem_solve`, `cases/scaling_gamg_strong_L6.case`) five times at p = 1, plus three runs each of L6 GAMG at p = 4 and in-house CG + Jacobi at p = 1, with `/usr/bin/time -v`, `vmstat 1` and `free -m` before each run. Raw table: [`benchmark_l6_diagnosis.md`](benchmark_l6_diagnosis.md); script: `python/l6_diagnosis.sh`.
+
+| run | elapsed [s] | max RSS [MiB] | major faults | si / so (sum over run) | free before [MiB] |
+|---|---|---|---|---|---|
+| GAMG p = 1 #1 | 21.7 | 2048 | 818 | 0 / 0 | 5826 |
+| GAMG p = 1 #2 | 20.4 | 2048 | 5 | 0 / 0 | 5371 |
+| GAMG p = 1 #3 | 22.5 | 2048 | 5 | 0 / 0 | 5364 |
+| GAMG p = 1 #4 | 21.8 | 2048 | 5 | 0 / 0 | 5355 |
+| GAMG p = 1 #5 | 23.2 | 2048 | 5 | 0 / 0 | 5335 |
+| GAMG p = 4 #1 | 16.3 | 702 per rank (2481 summed) | 21 | 0 / 0 | 5339 |
+| GAMG p = 4 #2 | 17.4 | 702 per rank (2488 summed) | 65 | 0 / 0 | 5329 |
+| GAMG p = 4 #3 | 17.3 | 702 per rank (2485 summed) | 53 | 0 / 0 | 5330 |
+| Jacobi p = 1 #1 | 463.1 | 1657 | 12 | 0 / 0 | 5328 |
+| Jacobi p = 1 #2 | 464.1 | 1657 | 5 | 0 / 0 | 5271 |
+| Jacobi p = 1 #3 | 418.7 | 1657 | 5 | 0 / 0 | 5267 |
+
+**Result: swapping does not explain the bimodality.** Swap-in and swap-out were zero in all 11 runs, swap used before every run was 0, and the lowest free memory during any run was 3.0 GiB (L6 GAMG p = 4 #1; 3.3-3.6 GiB at p = 1). The peak resident set of the GAMG p = 1 run is 2.0 GiB, against 5.3-5.8 GiB free before it. Major page faults were 5 in six of the 11 runs and 12-65 in four more; the only large count (818) is the first GAMG p = 1 run, which also had the smallest page cache before it (815 MiB vs 1258 MiB), consistent with reading the binary, libraries and mesh from disk; its elapsed time (21.7 s) is not out of line with the others, so major faults do not track run time. **The slow mode was not reproduced**: the five new runs took 20.4-23.2 s elapsed (in-program 21.1-23.8 s), none near 28 s, so there is also no slow run to correlate with. They were somewhat slower than the two fast 7b runs (19.7, 20.2 s) and much faster than the three slow ones, with a 14 % spread, so the machine was not in a state identical to the 7b session; the monitoring itself (`vmstat`, a 1 s `ps` loop) may have added a small overhead. With 5 runs and no slow one, this diagnosis cannot say what caused the 7b slow mode; it can only say that memory pressure is not visible in the system counters of a session where the mode did not appear, and that the 7b-session counters were not recorded. This is an absence of evidence for swapping in new runs, not a direct measurement of the 7b slow runs.
+
+**What the existing 7b data show about the slow mode.** The slow runs are slower in every phase, serial or not: read 2.2-2.4 s vs 1.2-1.4 s, partition 0.34-0.35 s vs 0.18-0.19 s, assembly 7.1-7.5 s vs 5.6-5.7 s, `pc_setup` 7.7-8.1 s vs 5.0-5.1 s, `ksp_solve` 7.1-7.3 s vs 5.7-5.8 s (the two fast 7b runs) (factors 1.3 to 1.8). Iteration counts are identical (24). That pattern is compatible with a uniformly slower CPU, but the cause remains an untested hypothesis (hypothesis (a) below). The p = 2 to 10 L6 runs are not known to be free of the effect: their total-time CVs are 2.5-15 %.
+
+**L6 strong speedups against both baselines.** "Median baseline" is the median of all five p = 1 runs (total 28.1 s, solve-only 14.79 s), as in the main tables. "Fast baseline" is the median of the two p = 1 runs below 24 s (total 19.99 s, solve-only 10.81 s; a median of 2 is their mean). The T_p for p >= 2 are the medians of the 7b runs in both columns. Computed by `python/l6_baselines.py`.
+
+| p | total [s] | S total, median baseline | S total, fast baseline | solve-only [s] | S solve, median baseline | S solve, fast baseline |
+|---|---|---|---|---|---|---|
+| 1 | 28.1 | 1.00 | 0.71 | 14.79 | 1.00 | 0.73 |
+| 2 | 20.2 | 1.39 | 0.99 | 8.80 | 1.68 | 1.23 |
+| 3 | 17.0 | 1.65 | 1.17 | 7.04 | 2.10 | 1.54 |
+| 4 | 15.3 | 1.84 | 1.31 | 6.13 | 2.41 | 1.76 |
+| 6 | 15.3 | 1.84 | 1.30 | 5.93 | 2.49 | 1.82 |
+| 8 | 16.3 | 1.72 | 1.22 | 5.66 | 2.61 | 1.91 |
+| 10 | 17.2 | 1.63 | 1.16 | 5.84 | 2.53 | 1.85 |
+
+Against the fast baseline the p = 1 point is 0.71 by construction (the p = 1 median is slower than the baseline), the maximum total speedup is 1.31 (p = 4) instead of 1.84, and the maximum solve-only speedup is 1.91 (p = 8) instead of 2.61. The p = 2 total (20.2 s) is as fast as the fast p = 1 runs, so against that baseline p = 2 gives no total speedup at all. Which baseline is "right" cannot be decided from these data: the median baseline mixes a mode that dominates p = 1 (3 of 5 runs) with p >= 2 medians of unknown mode, the fast baseline uses only 2 runs. Karp-Flatt and efficiency columns in the main table use the median baseline; with the fast baseline they would change by the same factors (about 0.71 for total, 0.73 for solve-only). Figure: the L6 curves of `figures/gamg_strong_speedup.png` show both baselines (solid, filled markers: median baseline; dotted, open markers: fast baseline); L4 and L5 are unaffected.
+
+**L6 GAMG vs Jacobi, p = 1, against both baselines.** The Jacobi time (median of 3, 6b: 414 s total, 405 s solve) is the same in both rows; the three Jacobi runs of the diagnosis took 419-464 s elapsed, consistent with 6b within 12 %. Factors for p >= 2 do not involve the p = 1 baseline and are unchanged.
+
+| GAMG p = 1 baseline | GAMG total [s] | factor total (Jacobi 414 s) | GAMG solve-only [s] | factor solve-only (Jacobi 405 s) |
+|---|---|---|---|---|
+| median (28.1 s): used in the GAMG vs Jacobi table above | 28.1 | 14.7 | 14.79 | 27.4 |
+| fast mode (median of 2) | 19.99 | 20.7 | 10.81 | 37.5 |
+
+The range of the L6 total factor in the text above, 14.7-17.2, is therefore 14.7-20.7 at p = 1 if the fast mode is taken as the true p = 1 time; the solve-only range 27.4-43.1 becomes 37.5-43.1 at p = 1 (the p = 4 and p = 8 values do not change).
+
 ### Rank-0 serial phases (read + partition) as a fraction of total time
 
 | case | p | GAMG | Jacobi (6b) |
@@ -428,9 +473,9 @@ The log reports 935 MPI reductions in the whole run. 811 of them (87 %) are in t
 
 **The bottleneck moves to the rank-0 serial phases.** With Jacobi the solve dominates: read + partition are 0.4 % of the L6 total at p = 1 and 1.7 % at p = 8, 0.9 % to 4.6 % for L5. With GAMG the solve is so much shorter that the same serial phases are 9.0 % of the L6 total at p = 1 and 39.8 % at p = 8 (L5: 7.4 % to 39.7 % at p = 10; L4: 7.5 % to 42.4 %; weak 200k: 7.3 % to 36.1 % at p = 10). In seconds, for L6 GAMG, read + partition go from 2.6 s at p = 1 to 6.5 s at p = 8 and 7.2 s at p = 10; rank 0 reads and partitions alone, so these phases cannot shrink with p and in this data they grow (read 2.23 s to 3.72 s; the cause was not investigated, see hypothesis 2 in the 6b list). Assembly also stops scaling after p = 4 (3.3 s at p = 4, 3.2 s at p = 8, 3.5 s at p = 10). This is the Amdahl shift: the solver became about 15 times faster on L6, but the total time of a run at p = 8 is 16.3 s of which read + partition is 6.5 s and the GAMG solve 5.7 s, so the next improvements to the total time are in parallel mesh input and partitioning (ParMETIS partitions faster in 6b, but reading is separate) rather than in the solver. This is consistent with the Karp-Flatt and speedup numbers above: the total-time speedup (1.84) is much lower than the solve-only speedup (2.4-2.6).
 
-**Limits of these numbers.** (1) The L6 p = 1 total times are bimodal: 19.7 and 20.2 s in two repetitions and 28.1-28.6 s in three, so the CV is 18 % and the L6 p = 1 baseline for speedup (28.1 s median) is uncertain; with the fast mode as baseline the L6 total speedups would be about 1.4 times lower. The cause was not diagnosed (the early probe and the 7a manual run were also in the fast mode, 19-20 s). (2) The CV flags (table below) cover most of the L6 and weak-200k configurations, so differences of a few percent between neighboring p are not resolved. (3) Jacobi comes from a different session than GAMG; the anchor agrees within 9 %, which is the resolution of the GAMG/Jacobi ratios, small against ratios of 6 to 43 but comparable to the L4 ratios at large p (1.7). (4) Everything is one laptop, one node.
+**Limits of these numbers.** (1) The L6 p = 1 total times are bimodal: 19.7 and 20.2 s in two repetitions and 28.1-28.6 s in three, so the CV is 18 %. The cause is **not known**: the diagnosis in the section "L6 p = 1 bimodality" below rules out swapping and major page faults as the explanation, and did not reproduce the slow mode. The main tables use the median (28.1 s) as the p = 1 baseline; that section gives the speedups and the GAMG/Jacobi factors against both baselines, and with the fast mode as baseline the L6 total speedups are about 1.4 times lower. (2) The CV flags (table below) cover most of the L6 and weak-200k configurations, so differences of a few percent between neighboring p are not resolved. (3) Jacobi comes from a different session than GAMG; the anchor agrees within 9 %, which is the resolution of the GAMG/Jacobi ratios, small against ratios of 6 to 43 but comparable to the L4 ratios at large p (1.7). (4) Everything is one laptop, one node.
 
-**Untested hypotheses (new).** (a) The bimodal L6 p = 1 time (about 20 s vs 28 s) may come from the host giving the VM a different core type or frequency in different repetitions; a test is to repeat L6 p = 1 many times with CPU-frequency and core-type information recorded on the host. (b) The assembly plateau at p >= 4 (3.2-3.5 s) may be the same memory-bandwidth saturation that limits the solve; a test is to measure the assembly memory traffic and compare it to the triad rate. Neither is tested here and no conclusion depends on them.
+**Untested hypotheses (new).** (a) The bimodal L6 p = 1 time (about 20 s vs 28 s) is uniformly slower in every phase (see the L6 bimodality section), which is what a change in effective CPU speed (host scheduling, frequency, core type) would look like, but this is **untested**: memory pressure was ruled out and nothing in the data identifies the cause; a test is to repeat L6 p = 1 many times with CPU-frequency and core-type information recorded on the host. (b) The assembly plateau at p >= 4 (3.2-3.5 s) may be the same memory-bandwidth saturation that limits the solve; a test is to measure the assembly memory traffic and compare it to the triad rate. Neither is tested here and no conclusion depends on them.
 
 ### Noisy configurations (CV > 5 %)
 
@@ -463,6 +508,8 @@ python/.venv/bin/python python/run_scaling.py gamg-cases      # cases/scaling_ga
 python/.venv/bin/python python/run_scaling.py gamg-probe      # one probe per largest case, estimate
 python/.venv/bin/python python/run_scaling.py gamg-run        # resumable; includes the Jacobi anchor
 python/.venv/bin/python python/run_scaling.py gamg-logview    # L6, p = 4, petsc.log_view = true
+python/l6_diagnosis.sh /path/to/outdir                          # 7c: L6 bimodality diagnosis (11 runs, ~25 min)
+python/.venv/bin/python python/l6_baselines.py                # 7c: L6 speedups against both p = 1 baselines
 python/.venv/bin/python python/run_scaling.py gamg-aggregate  # docs/benchmark_gamg_results.json
 python/.venv/bin/python python/plot_gamg.py                   # docs/figures/gamg_*.png
 python3 python/gamg_tables.py                                 # markdown tables

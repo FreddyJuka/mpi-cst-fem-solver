@@ -13,6 +13,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plot_scaling as ps  # noqa: E402  (style helpers; sets the Agg backend)
+import l6_baselines  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = ps.ROOT
@@ -85,7 +86,15 @@ def main():
             m, lo, hi = (np.array([t[1]["derived"][what][k] for t in pts])
                          for k in ("speedup", "speedup_lo", "speedup_hi"))
             ax.errorbar(p, m, yerr=ps.err(m, lo, hi), color=COLORS[i], marker=MARKERS[i],
-                        markersize=7, linewidth=2, capsize=3, label=f"L{l}")
+                        markersize=7, linewidth=2, capsize=3,
+                        label=f"L{l} (median baseline)" if l == 6 else f"L{l}")
+            if l == 6:  # second baseline: fast mode of the bimodal p = 1 time
+                b = l6_baselines.baselines(G)
+                key = "total" if what == "total" else "solve"
+                med = np.array([t[1]["summary"][what]["median"] for t in pts])
+                ax.plot(p, b["fast"][key] / med, color=COLORS[i], marker=MARKERS[i], markersize=7,
+                        linewidth=1.6, linestyle=":", markerfacecolor="none",
+                        label="L6 (fast-mode baseline, median of 2)")
         ps.style(ax, "MPI ranks p", "speedup $T_1/T_p$", f"GAMG strong scaling: {title}")
         ax.set_xticks(NPS)
         ax.legend(fontsize=8, frameon=False, labelcolor=ps.INK)
