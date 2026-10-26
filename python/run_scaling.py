@@ -140,12 +140,12 @@ def cmd_meshes(args):
     for lvl in STRONG_LEVELS:
         mesh = MESHES / f"kirsch_L{lvl}.msh"
         if not mesh.exists() or f"strong_L{lvl}" not in meta:
-            t0 = time.time()
+            t0 = time.perf_counter()
             if not mesh.exists():
                 mesh_kirsch.generate(level=lvl, output=mesh)
             meta[f"strong_L{lvl}"] = dict(mesh=str(mesh.relative_to(ROOT)),
                                           dofs=2 * mesh_kirsch.count_nodes(mesh),
-                                          bytes=mesh.stat().st_size, gen_seconds=time.time() - t0)
+                                          bytes=mesh.stat().st_size, gen_seconds=time.perf_counter() - t0)
         case_for(f"strong_L{lvl}", mesh)
     case_for("pm_L5_metis", MESHES / "kirsch_L5.msh", "metis")
     case_for("pm_L5_parmetis", MESHES / "kirsch_L5.msh", "parmetis")
@@ -191,9 +191,9 @@ def run_one(group, e, tag, force_record_bindings=True):
     run_case = d / "run.case"
     run_case.write_text(text)
     cmd = MPI_PREFIX + ["-n", str(e["np"]), str(e["exe"]), str(run_case.relative_to(ROOT))]
-    t0 = time.time()
+    t0 = time.perf_counter()
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    wall = time.time() - t0
+    wall = time.perf_counter() - t0
     (d / "stdout.txt").write_text(r.stdout)
     (d / "stderr.txt").write_text(r.stderr)
     if r.returncode != 0 or not (out / "timings.json").exists():

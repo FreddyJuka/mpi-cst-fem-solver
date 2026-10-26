@@ -30,6 +30,18 @@ Limitations that matter when reading the results:
 - Weak scaling: two series with a target of 50,000 and 200,000 DOFs per rank, generated with `mesh_kirsch.py --target-dofs` (within 3 % of target). Time per iteration is the maximum over ranks of the solve total divided by the iteration count; weak efficiency is T_iter(1)/T_iter(p).
 - **SpMV effective bandwidth** (approximate lower-bound traffic model). Bytes per SpMV = sum over ranks of `nnz*(8+4) + (rows+1)*4 + rows*8 (x) + rows*8 (y)`: matrix values (8 B) and column indices (4 B), row pointers, and the x and y vectors, with **x assumed read only once** (cache reuse of x is not credited beyond that, and ghost values are not counted). The bandwidth is that number times the iteration count divided by the time. **The time is the sum of the per-component maxima over ranks: max(local SpMV) + max(A_ghost SpMV).** The solver records only the maximum of each component, not the maximum of the per-rank sum, and the sum of maxima is at least the maximum of the sums. The reported bandwidth is therefore an approximate lower bound of the traffic rate. The triad curve counts 24 bytes per element (STREAM convention); with write-allocate the real traffic is 32 bytes, so the two numbers are comparable but not identical in definition.
 
+### Timing methodology
+
+**All published times are from `MPI_Wtime`.** Every phase in `timings.json` (and `total`) is measured with `MPI_Wtime`; one internal helper uses `std::chrono::steady_clock`. In this Open MPI 4.1.6 build (`linux` timer component) `MPI_Wtick` is 1e-9 s and `MPI_WTIME_IS_GLOBAL` is false. `benchmarks/clock_check.cpp` samples `MPI_Wtime`, `steady_clock`, `CLOCK_MONOTONIC` and `CLOCK_REALTIME` together every 100 ms. Over 520 s, `MPI_Wtime` and `steady_clock` stayed within 0.13 ms of `CLOCK_MONOTONIC`, with no step larger than 10 ms. **`MPI_Wtime` is monotonic here.** `total` is one timer from a barrier after start-up to a barrier after output; it equals the sum of the phases (441.49 s vs 441.5 s in the check below).
+
+**WSL2 steps `CLOCK_REALTIME` backward.** In the same 520 s run, `CLOCK_REALTIME` stepped backward 16 times, by 0.37-0.59 s, about every 32 s (3 times in a separate 120 s run). It lost 9.2 s against `CLOCK_MONOTONIC` (1.8 %). Tools that time durations with the realtime clock therefore **underestimate long durations** under WSL2. These include GNU `/usr/bin/time` and Python `time.time()`. One L6 Jacobi p = 1 run measured concurrently gave 434.3 s from GNU `time` (and the same from `date +%s.%N`), but 442.0 s from `/proc/uptime` and 441.5 s from the in-program `total`. GNU `time` was 7.7 s (1.7 %) short. In the three Jacobi runs of the L6 diagnosis the shortfall was 11.5-14.9 s (2.5-3.2 %). For a 20 s run the bias is at most about one step (< 0.6 s).
+
+**Consequences.**
+- The 6b and 7b tables and figures are unaffected, since they use `timings.json`.
+- Before this fix, the scripts timed runs with `time.time()`. This affected the run-harness `wall.txt` files in `results/`, the probe times and the study-time estimates. These were used only for planning, and are biased low by up to about 2-3 %.
+- The scripts now use `time.perf_counter()` (monotonic) for all durations.
+- The elapsed column of the L6 diagnosis comes from GNU `time` and is labelled as biased low.
+
 ### Repetitions: which configurations used 3 and which used 5
 
 | configurations | np | warm-up + repetitions |
@@ -37,7 +49,7 @@ Limitations that matter when reading the results:
 | strong L4, strong L5, weak 50k series, ParMETIS comparison (L5) | 1, 2, 3, 4, 6, 8, 10 (ParMETIS: 4, 8, 10) | 1 + **5** |
 | strong **L6**, weak **200k** series | **1, 2, 4, 8** | 1 + **3** |
 
-**Why.** A timed probe showed that one L6 run at np = 1 takes 394 s and one 200k-series run at p = 10 takes 425 s (2.0 M DOFs). The full plan (all np, 5 repetitions) was estimated at about 5.6 hours, above the 2.5 hour budget. The two most expensive groups were therefore reduced to np = 1, 2, 4, 8 and 3 repetitions, which brought the study to about 2.4 hours. Consequences: the 200k series ends at p = 8 (1.6 M DOFs, not 2.0 M); the L6 and 200k results have no np = 3, 6 or 10; and their min/max error bars come from 3 runs, so a median of 3 is less robust against a single outlier than a median of 5 (this matters for `weak_200k` at p = 2, CV 10.3 %).
+**Why.** A timed probe showed that one L6 run at np = 1 takes 394 s and one 200k-series run at p = 10 takes 425 s (2.0 M DOFs; harness wall times from `time.time()`, biased low by up to about 2-3 %, see Timing methodology). The full plan (all np, 5 repetitions) was estimated at about 5.6 hours, above the 2.5 hour budget. The two most expensive groups were therefore reduced to np = 1, 2, 4, 8 and 3 repetitions, which brought the study to about 2.4 hours. Consequences: the 200k series ends at p = 8 (1.6 M DOFs, not 2.0 M); the L6 and 200k results have no np = 3, 6 or 10; and their min/max error bars come from 3 runs, so a median of 3 is less robust against a single outlier than a median of 5 (this matters for `weak_200k` at p = 2, CV 10.3 %).
 
 Sample binding report (L4, np = 4):
 
@@ -361,23 +373,23 @@ Iterations grow as DOFs^0.51 for Jacobi (fit through L4-L6 at p = 1) and as DOFs
 
 ### L6 p = 1 bimodality: diagnosis and both baselines (Milestone 7c)
 
-**What was measured.** The five L6 GAMG p = 1 repetitions of 7b took 19.7, 20.2, 28.1, 28.3, 28.6 s (in-program total; wall times 20.2, 20.7, 28.6, 28.8, 29.2 s). The hypothesis tested here was that the slow mode is memory pressure (the VM has 7.7 GiB RAM and 2 GiB swap). The diagnosis reran the case with the same binary (`build-gamg/cstfem_solve`, `cases/scaling_gamg_strong_L6.case`) five times at p = 1, plus three runs each of L6 GAMG at p = 4 and in-house CG + Jacobi at p = 1, with `/usr/bin/time -v`, `vmstat 1` and `free -m` before each run. Raw table: [`benchmark_l6_diagnosis.md`](benchmark_l6_diagnosis.md); script: `python/l6_diagnosis.sh`.
+**What was measured.** The five L6 GAMG p = 1 repetitions of 7b took 19.7, 20.2, 28.1, 28.3, 28.6 s (in-program total; the harness wall times 20.2, 20.7, 28.6, 28.8, 29.2 s were measured with Python `time.time()`, i.e. `CLOCK_REALTIME`, and are slightly biased low, see "Timing methodology"). The hypothesis tested here was that the slow mode is memory pressure (the VM has 7.7 GiB RAM and 2 GiB swap). The diagnosis reran the case with the same binary (`build-gamg/cstfem_solve`, `cases/scaling_gamg_strong_L6.case`) five times at p = 1, plus three runs each of L6 GAMG at p = 4 and in-house CG + Jacobi at p = 1, with `/usr/bin/time -v`, `vmstat 1` and `free -m` before each run. Raw table: [`benchmark_l6_diagnosis.md`](benchmark_l6_diagnosis.md); script: `python/l6_diagnosis.sh`.
 
-| run | elapsed [s] | max RSS [MiB] | major faults | si / so (sum over run) | free before [MiB] |
-|---|---|---|---|---|---|
-| GAMG p = 1 #1 | 21.7 | 2048 | 818 | 0 / 0 | 5826 |
-| GAMG p = 1 #2 | 20.4 | 2048 | 5 | 0 / 0 | 5371 |
-| GAMG p = 1 #3 | 22.5 | 2048 | 5 | 0 / 0 | 5364 |
-| GAMG p = 1 #4 | 21.8 | 2048 | 5 | 0 / 0 | 5355 |
-| GAMG p = 1 #5 | 23.2 | 2048 | 5 | 0 / 0 | 5335 |
-| GAMG p = 4 #1 | 16.3 | 702 per rank (2481 summed) | 21 | 0 / 0 | 5339 |
-| GAMG p = 4 #2 | 17.4 | 702 per rank (2488 summed) | 65 | 0 / 0 | 5329 |
-| GAMG p = 4 #3 | 17.3 | 702 per rank (2485 summed) | 53 | 0 / 0 | 5330 |
-| Jacobi p = 1 #1 | 463.1 | 1657 | 12 | 0 / 0 | 5328 |
-| Jacobi p = 1 #2 | 464.1 | 1657 | 5 | 0 / 0 | 5271 |
-| Jacobi p = 1 #3 | 418.7 | 1657 | 5 | 0 / 0 | 5267 |
+| run | elapsed, GNU time [s] (biased low) | in-program total [s] | max RSS [MiB] | major faults | si / so (sum over run) | free before [MiB] |
+|---|---|---|---|---|---|---|
+| GAMG p = 1 #1 | 21.7 | 22.1 | 2048 | 818 | 0 / 0 | 5826 |
+| GAMG p = 1 #2 | 20.4 | 21.1 | 2048 | 5 | 0 / 0 | 5371 |
+| GAMG p = 1 #3 | 22.5 | 22.0 | 2048 | 5 | 0 / 0 | 5364 |
+| GAMG p = 1 #4 | 21.8 | 22.4 | 2048 | 5 | 0 / 0 | 5355 |
+| GAMG p = 1 #5 | 23.2 | 23.8 | 2048 | 5 | 0 / 0 | 5335 |
+| GAMG p = 4 #1 | 16.3 | 15.8 | 702 per rank (2481 summed) | 21 | 0 / 0 | 5339 |
+| GAMG p = 4 #2 | 17.4 | 18.0 | 702 per rank (2488 summed) | 65 | 0 / 0 | 5329 |
+| GAMG p = 4 #3 | 17.3 | 16.8 | 702 per rank (2485 summed) | 53 | 0 / 0 | 5330 |
+| Jacobi p = 1 #1 | 463.1 | 478.0 | 1657 | 12 | 0 / 0 | 5328 |
+| Jacobi p = 1 #2 | 464.1 | 478.2 | 1657 | 5 | 0 / 0 | 5271 |
+| Jacobi p = 1 #3 | 418.7 | 430.2 | 1657 | 5 | 0 / 0 | 5267 |
 
-**Result: swapping does not explain the bimodality.** Swap-in and swap-out were zero in all 11 runs, swap used before every run was 0, and the lowest free memory during any run was 3.0 GiB (L6 GAMG p = 4 #1; 3.3-3.6 GiB at p = 1). The peak resident set of the GAMG p = 1 run is 2.0 GiB, against 5.3-5.8 GiB free before it. Major page faults were 5 in six of the 11 runs and 12-65 in four more; the only large count (818) is the first GAMG p = 1 run, which also had the smallest page cache before it (815 MiB vs 1258 MiB), consistent with reading the binary, libraries and mesh from disk; its elapsed time (21.7 s) is not out of line with the others, so major faults do not track run time. **The slow mode was not reproduced**: the five new runs took 20.4-23.2 s elapsed (in-program 21.1-23.8 s), none near 28 s, so there is also no slow run to correlate with. They were somewhat slower than the two fast 7b runs (19.7, 20.2 s) and much faster than the three slow ones, with a 14 % spread, so the machine was not in a state identical to the 7b session; the monitoring itself (`vmstat`, a 1 s `ps` loop) may have added a small overhead. With 5 runs and no slow one, this diagnosis cannot say what caused the 7b slow mode; it can only say that memory pressure is not visible in the system counters of a session where the mode did not appear, and that the 7b-session counters were not recorded. This is an absence of evidence for swapping in new runs, not a direct measurement of the 7b slow runs.
+**Result: swapping does not explain the bimodality.** Swap-in and swap-out were zero in all 11 runs, swap used before every run was 0, and the lowest free memory during any run was 3.0 GiB (L6 GAMG p = 4 #1; 3.3-3.6 GiB at p = 1). The peak resident set of the GAMG p = 1 run is 2.0 GiB, against 5.3-5.8 GiB free before it. Major page faults were 5 in six of the 11 runs and 12-65 in four more; the only large count (818) is the first GAMG p = 1 run, which also had the smallest page cache before it (815 MiB vs 1258 MiB), consistent with reading the binary, libraries and mesh from disk; its elapsed time (21.7 s) is not out of line with the others, so major faults do not track run time. **The slow mode was not reproduced**: the five new runs took 20.4-23.2 s elapsed (GNU `time`, biased low; in-program 21.1-23.8 s), none near 28 s, so there is also no slow run to correlate with. They were somewhat slower than the two fast 7b runs (19.7, 20.2 s) and much faster than the three slow ones, with a 14 % spread, so the machine was not in a state identical to the 7b session; the monitoring itself (`vmstat`, a 1 s `ps` loop) may have added a small overhead. With 5 runs and no slow one, this diagnosis cannot say what caused the 7b slow mode; it can only say that memory pressure is not visible in the system counters of a session where the mode did not appear, and that the 7b-session counters were not recorded. This is an absence of evidence for swapping in new runs, not a direct measurement of the 7b slow runs.
 
 **What the existing 7b data show about the slow mode.** The slow runs are slower in every phase, serial or not: read 2.2-2.4 s vs 1.2-1.4 s, partition 0.34-0.35 s vs 0.18-0.19 s, assembly 7.1-7.5 s vs 5.6-5.7 s, `pc_setup` 7.7-8.1 s vs 5.0-5.1 s, `ksp_solve` 7.1-7.3 s vs 5.7-5.8 s (the two fast 7b runs) (factors 1.3 to 1.8). Iteration counts are identical (24). That pattern is compatible with a uniformly slower CPU, but the cause remains an untested hypothesis (hypothesis (a) below). The p = 2 to 10 L6 runs are not known to be free of the effect: their total-time CVs are 2.5-15 %.
 
@@ -395,7 +407,7 @@ Iterations grow as DOFs^0.51 for Jacobi (fit through L4-L6 at p = 1) and as DOFs
 
 Against the fast baseline the p = 1 point is 0.71 by construction (the p = 1 median is slower than the baseline), the maximum total speedup is 1.31 (p = 4) instead of 1.84, and the maximum solve-only speedup is 1.91 (p = 8) instead of 2.61. The p = 2 total (20.2 s) is as fast as the fast p = 1 runs, so against that baseline p = 2 gives no total speedup at all. Which baseline is "right" cannot be decided from these data: the median baseline mixes a mode that dominates p = 1 (3 of 5 runs) with p >= 2 medians of unknown mode, the fast baseline uses only 2 runs. Karp-Flatt and efficiency columns in the main table use the median baseline; with the fast baseline they would change by the same factors (about 0.71 for total, 0.73 for solve-only). Figure: the L6 curves of `figures/gamg_strong_speedup.png` show both baselines (solid, filled markers: median baseline; dotted, open markers: fast baseline); L4 and L5 are unaffected.
 
-**L6 GAMG vs Jacobi, p = 1, against both baselines.** The Jacobi time (median of 3, 6b: 414 s total, 405 s solve) is the same in both rows; the three Jacobi runs of the diagnosis took 419-464 s elapsed, consistent with 6b within 12 %. Factors for p >= 2 do not involve the p = 1 baseline and are unchanged.
+**L6 GAMG vs Jacobi, p = 1, against both baselines.** The Jacobi time (median of 3, 6b: 414 s total, 405 s solve) is the same in both rows; the three Jacobi runs of the diagnosis took 430-478 s in-program total (`MPI_Wtime`), up to 15 % above the 6b median of 414 s (the 419-464 s GNU `time` elapsed values are biased low, see "Timing methodology"). Factors for p >= 2 do not involve the p = 1 baseline and are unchanged.
 
 | GAMG p = 1 baseline | GAMG total [s] | factor total (Jacobi 414 s) | GAMG solve-only [s] | factor solve-only (Jacobi 405 s) |
 |---|---|---|---|---|
@@ -510,6 +522,7 @@ python/.venv/bin/python python/run_scaling.py gamg-run        # resumable; inclu
 python/.venv/bin/python python/run_scaling.py gamg-logview    # L6, p = 4, petsc.log_view = true
 python/l6_diagnosis.sh /path/to/outdir                          # 7c: L6 bimodality diagnosis (11 runs, ~25 min)
 python/.venv/bin/python python/l6_baselines.py                # 7c: L6 speedups against both p = 1 baselines
+build/benchmarks/clock_check 520 100                          # clock consistency check (MPI_Wtime vs monotonic vs realtime)
 python/.venv/bin/python python/run_scaling.py gamg-aggregate  # docs/benchmark_gamg_results.json
 python/.venv/bin/python python/plot_gamg.py                   # docs/figures/gamg_*.png
 python3 python/gamg_tables.py                                 # markdown tables

@@ -121,7 +121,7 @@ def generate_target_dofs(target_dofs, tol=0.03, output="kirsch.msh", verbose=Tru
     probe; then bisection on log(s) between a bracket on either side of the target.
     Returns (scale, dofs, number of meshes generated, seconds).
     """
-    t0 = time.time()
+    t0 = time.perf_counter()
     tries = 0
 
     def dofs_at(s):
@@ -138,7 +138,7 @@ def generate_target_dofs(target_dofs, tol=0.03, output="kirsch.msh", verbose=Tru
     lo = hi = None  # lo: scale giving too many DOFs (finer), hi: too few (coarser)
     for _ in range(60):
         if abs(d / target_dofs - 1) <= tol:
-            return s, d, tries, time.time() - t0
+            return s, d, tries, time.perf_counter() - t0
         if d > target_dofs:
             lo = s
         else:
@@ -173,9 +173,9 @@ def main(argv=None):
               f"({100 * (dofs / args.target_dofs - 1):+.2f} % of {int(args.target_dofs)}), "
               f"{tries} meshes generated in {secs:.1f} s")
         return 0
-    t0 = time.time()
+    t0 = time.perf_counter()
     out = generate(output=args.output, verbose=args.verbose, scale=args.scale, **common)
-    print(f"wrote {out}: {2 * count_nodes(out)} DOFs in {time.time() - t0:.1f} s")
+    print(f"wrote {out}: {2 * count_nodes(out)} DOFs in {time.perf_counter() - t0:.1f} s")
     return 0
 
 

@@ -82,11 +82,11 @@ def run(args):
                "levels": {}, "planes": {}}
     for level in args.levels:
         mesh = Path(args.meshes) / f"kirsch_L{level}.msh"
-        t0 = time.time()
+        t0 = time.perf_counter()
         h_max, h_eff = mesh_measures(mesh)
         results["levels"][level] = {"mesh": os.path.relpath(mesh, ROOT), "h_max": h_max,
                                     "h_eff": h_eff}
-        print(f"L{level}: h_max {h_max:.4e}, h_eff {h_eff:.4e} ({time.time() - t0:.1f} s)")
+        print(f"L{level}: h_max {h_max:.4e}, h_eff {h_eff:.4e} ({time.perf_counter() - t0:.1f} s)")
 
     for plane in ("plane_stress", "plane_strain"):
         rows = {}
@@ -97,11 +97,11 @@ def run(args):
             write_case(case, results["levels"][level]["mesh"], plane, out_dir)
             if not args.skip_run:
                 cmd = [args.mpiexec, "-n", str(args.np), args.solver, str(case)]
-                t0 = time.time()
+                t0 = time.perf_counter()
                 proc = subprocess.run(cmd, capture_output=True, text=True)
                 if proc.returncode != 0:
                     sys.exit(f"{' '.join(cmd)} failed:\n{proc.stdout}\n{proc.stderr}")
-                print(f"{plane} L{level}: {time.time() - t0:.1f} s")
+                print(f"{plane} L{level}: {time.perf_counter() - t0:.1f} s")
             tj = json.loads((out_dir / "timings.json").read_text())
             k = tj["kirsch"]
             rows[level] = {

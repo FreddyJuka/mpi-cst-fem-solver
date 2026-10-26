@@ -63,7 +63,7 @@ which prints a partition report and writes `partition.pvtu` with one piece per r
 
 ## Benchmarks
 
-`build/benchmarks/stream_triad [elements] [repetitions]` is a STREAM-like triad: each MPI rank runs it on its own arrays at the same time, e.g. `mpiexec -n 4 --bind-to core --map-by core build/benchmarks/stream_triad`, to see where memory bandwidth saturates.
+`build/benchmarks/stream_triad [elements] [repetitions]` is a STREAM-like triad: each MPI rank runs it on its own arrays at the same time, e.g. `mpiexec -n 4 --bind-to core --map-by core build/benchmarks/stream_triad`, to see where memory bandwidth saturates. `build/benchmarks/clock_check [seconds] [interval_ms]` samples `MPI_Wtime`, `steady_clock`, `CLOCK_MONOTONIC` and `CLOCK_REALTIME` together and reports divergence and jumps (see Timing methodology in `docs/BENCHMARKS.md`).
 
 The strong and weak scaling study (METIS vs ParMETIS, SpMV bandwidth, analysis) is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md); `python/run_scaling.py` reproduces it.
 
